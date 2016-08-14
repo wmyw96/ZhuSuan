@@ -147,9 +147,15 @@ if __name__ == "__main__":
             train_vz_mean, train_vz_logstd = q_net(x, n_z)
             train_variational = ReparameterizedNormal(
                 train_vz_mean, train_vz_logstd)
-    grads, lower_bound = advi(
-        train_model, x, train_variational, lb_samples, optimizer)
-    infer = optimizer.apply_gradients(grads)
+    lower_bound = advi(
+        train_model, x, train_variational, lb_samples)
+    grads1 = optimizer.compute_gradients(-lower_bound, var_list=[
+        i for i in tf.trainable_variables() if i.name.startswith('model')])
+    grads2 = optimizer.compute_gradients(-lower_bound, var_list=[
+        i for i in tf.trainable_variables() if i.name.startswith('variational')
+    ])
+    infer1 = optimizer.apply_gradients(grads1)
+    infer2 = optimizer.apply_gradients(grads2)
 
     # Build the evaluation computation graph
     with tf.variable_scope("model", reuse=True) as scope:
@@ -181,7 +187,10 @@ if __name__ == "__main__":
                 x_batch = x_train[t * batch_size:(t + 1) * batch_size]
                 x_batch = np.random.binomial(
                     n=1, p=x_batch, size=x_batch.shape).astype('float32')
-                _, lb = sess.run([infer, lower_bound], feed_dict={x: x_batch})
+                _, lb = sess.run([infer1, lower_bound],
+                                 feed_dict={x: x_batch})
+                _, lb = sess.run([infer2, lower_bound],
+                                 feed_dict={x: x_batch})
                 lbs.append(lb)
             print('Epoch {}: Lower bound = {}'.format(epoch, np.mean(lbs)))
             if epoch % test_freq == 0:

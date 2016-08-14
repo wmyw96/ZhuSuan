@@ -85,8 +85,7 @@ class ReparameterizedNormal(Variational):
                         tf.expand_dims(tf.exp(self.vz_logstd), 1)), 2)
 
 
-def advi(model, x, variational, n_samples=1,
-         optimizer=tf.train.AdamOptimizer()):
+def advi(model, x, variational, n_samples=1):
     """
     Implements the automatic differentiation variational inference (ADVI)
     algorithm. For now we assume all latent variables have been transformed in
@@ -106,6 +105,7 @@ def advi(model, x, variational, n_samples=1,
     :return: A 0-D Tensor. The variational lower bound.
     """
     samples = variational.sample(n_samples)
-    lower_bound = model.log_prob(samples, x) - variational.logpdf(samples)
-    lower_bound = tf.reduce_mean(lower_bound)
-    return optimizer.compute_gradients(-lower_bound), lower_bound
+    expected_log_joint = tf.reduce_mean(model.log_prob(samples, x))
+    entropy = tf.reduce_mean(-variational.logpdf(samples))
+    lower_bound = expected_log_joint + entropy
+    return lower_bound
