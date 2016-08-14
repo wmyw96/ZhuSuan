@@ -6,6 +6,7 @@ from __future__ import print_function
 from __future__ import division
 import sys
 import os
+import time
 
 import tensorflow as tf
 import prettytensor as pt
@@ -110,6 +111,42 @@ def is_loglikelihood(model, x, z_proposal, n_samples=1000):
     log_w = model.log_prob(samples, x) - z_proposal.logpdf(samples)
     return log_mean_exp(log_w, 1)
 
+LogDir = "/tmp/train_logs_" + time.strftime('%Y%m%d_%H%M%S',time.localtime(time.time()))
+IMAGE_PIXELS = 28
+
+flags = tf.app.flags
+flags.DEFINE_string("ps_hosts", "", "192.168.245.100:2333")
+flags.DEFINE_string("worker_hosts", "", "192.168.245.153:2333")
+flags.DEFINE_string("job_name", "", "worker")
+flags.DEFINE_integer("task_index", 0, "Index of task within the job")
+flags.DEFINE_string("data_dir", "/tmp/mnist-data",
+                    "Directory for storing mnist data")
+flags.DEFINE_boolean("download_only", False,
+                     "Only perform downloading of data; Do not proceed to "
+                     "session preparation, model definition or training")
+#flags.DEFINE_integer("worker_index", 0,
+#                     "Worker task index, should be >= 0. worker_index=0 is "
+#                     "the master worker task the performs the variable "
+#                     "initialization ")
+flags.DEFINE_integer("num_workers", 1,
+                     "Total number of workers (must be >= 1)")
+flags.DEFINE_integer("num_parameter_servers", 1,
+                     "Total number of parameter servers (must be >= 1)")
+flags.DEFINE_integer("grpc_port", 2333,
+                     "TensorFlow GRPC port")
+flags.DEFINE_string("worker_grpc_url", "grpc://192.168.245.153:2333",
+                    "Worker GRPC URL (e.g., grpc://1.2.3.4:2222, or "
+                    "grpc://tf-worker0:2222)")
+flags.DEFINE_boolean("sync_replicas", False,
+                     "Use the sync_replicas (synchronized replicas) mode, "
+                     "wherein the parameter updates from workers are aggregated "
+                     "before applied to avoid stale gradients")
+flags.DEFINE_integer("replicas_to_aggregate", None,
+                     "Number of replicas to aggregate before parameter update"
+                     "is applied (For sync_replicas mode only; default: "
+                     "num_workers)")
+
+FLAGS = flags.FLAGS
 
 if __name__ == "__main__":
     tf.set_random_seed(1234)
@@ -136,74 +173,120 @@ if __name__ == "__main__":
     test_iters = x_test.shape[0] // test_batch_size
     test_freq = 10
 
-    # Build the training computation graph
-    x = tf.placeholder(tf.float32, shape=(None, x_train.shape[1]))
-    optimizer = tf.train.AdamOptimizer(learning_rate=0.001, epsilon=1e-4)
-    with tf.variable_scope("model") as scope:
-        with pt.defaults_scope(phase=pt.Phase.train):
-            train_model = M1(n_z, x_train.shape[1])
-    with tf.variable_scope("variational") as scope:
-        with pt.defaults_scope(phase=pt.Phase.train):
-            train_vz_mean, train_vz_logstd = q_net(x, n_z)
-            train_variational = ReparameterizedNormal(
-                train_vz_mean, train_vz_logstd)
-    lower_bound = advi(
-        train_model, x, train_variational, lb_samples)
-    grads1 = optimizer.compute_gradients(-lower_bound, var_list=[
-        i for i in tf.trainable_variables() if i.name.startswith('model')])
-    grads2 = optimizer.compute_gradients(-lower_bound, var_list=[
-        i for i in tf.trainable_variables() if i.name.startswith('variational')
-    ])
-    infer1 = optimizer.apply_gradients(grads1)
-    infer2 = optimizer.apply_gradients(grads2)
+    ps_hosts = FLAGS.ps_hosts.split(",")
+    worker_hosts = FLAGS.worker_hosts.split(",")
+    
+    # Create a cluster from the parameter server and worker hosts.
+    clusterSpec = tf.train.ClusterSpec({"ps": ps_hosts, "worker": worker_hosts})
+    
+    print("Create and start a server for the local task.")
+    # Create and start a server for the local task.
+    server = tf.train.Server(clusterSpec,
+                             job_name=FLAGS.job_name,
+                             task_index=FLAGS.task_index)
 
-    # Build the evaluation computation graph
-    with tf.variable_scope("model", reuse=True) as scope:
-        with pt.defaults_scope(phase=pt.Phase.test):
-            eval_model = M1(n_z, x_train.shape[1])
-    with tf.variable_scope("variational", reuse=True) as scope:
-        with pt.defaults_scope(phase=pt.Phase.test):
-            eval_vz_mean, eval_vz_logstd = q_net(x, n_z)
-            eval_variational = ReparameterizedNormal(
-                eval_vz_mean, eval_vz_logstd)
-    eval_lower_bound = is_loglikelihood(
-        eval_model, x, eval_variational, lb_samples)
-    eval_log_likelihood = is_loglikelihood(
-        eval_model, x, eval_variational, ll_samples)
+    print("Start ps and worker server")
+    if FLAGS.job_name == "ps":
+        server.join()
+    elif FLAGS.job_name == "worker":
+        #set distributed device
+        with tf.device(tf.train.replica_device_setter(
+            worker_device="/job:worker/task:%d" % FLAGS.task_index,
+            cluster=clusterSpec)):
+            
+            # Build the training computation graph
+            x = tf.placeholder(tf.float32, shape=(None, x_train.shape[1]))
+            optimizer = tf.train.AdamOptimizer(learning_rate=0.001, epsilon=1e-4)
+            with tf.variable_scope("model") as scope:
+                with pt.defaults_scope(phase=pt.Phase.train):
+                    train_model = M1(n_z, x_train.shape[1])
+            with tf.variable_scope("variational") as scope:
+                with pt.defaults_scope(phase=pt.Phase.train):
+                    train_vz_mean, train_vz_logstd = q_net(x, n_z)
+                    train_variational = ReparameterizedNormal(
+                        train_vz_mean, train_vz_logstd)
+            lower_bound = advi(
+                train_model, x, train_variational, lb_samples)
+            grads1 = optimizer.compute_gradients(-lower_bound, var_list=[
+                i for i in tf.trainable_variables() if i.name.startswith('model')])
+            grads2 = optimizer.compute_gradients(-lower_bound, var_list=[
+                i for i in tf.trainable_variables() if i.name.startswith('variational')
+            ])
+            infer1 = optimizer.apply_gradients(grads1)
+            infer2 = optimizer.apply_gradients(grads2)
+        
+            """
+            # Build the evaluation computation graph
+            with tf.variable_scope("model", reuse=True) as scope:
+                with pt.defaults_scope(phase=pt.Phase.test):
+                    eval_model = M1(n_z, x_train.shape[1])
+            with tf.variable_scope("variational", reuse=True) as scope:
+                with pt.defaults_scope(phase=pt.Phase.test):
+                    eval_vz_mean, eval_vz_logstd = q_net(x, n_z)
+                    eval_variational = ReparameterizedNormal(
+                        eval_vz_mean, eval_vz_logstd)
+            eval_lower_bound = is_loglikelihood(
+                eval_model, x, eval_variational, lb_samples)
+            eval_log_likelihood = is_loglikelihood(
+                eval_model, x, eval_variational, ll_samples)
+            """
 
-    params = tf.trainable_variables()
-    for i in params:
-        print(i.name, i.get_shape())
+            global_step = tf.Variable(0)
+            saver = tf.train.Saver()
+            summary_op = tf.merge_all_summaries()
+            init_op = tf.initialize_all_variables()
 
-    init = tf.initialize_all_variables()
+        # Create a "supervisor", which oversees the training process.
+        sv = tf.train.Supervisor(is_chief=(FLAGS.task_index == 0),
+                                 logdir=LogDir,
+                                 init_op=init_op,
+                                 summary_op=summary_op,
+                                 #summary_op=None,
+                                 saver=saver,
+                                 global_step=global_step,
+                                 save_model_secs=600)
 
-    # Run the inference
-    with tf.Session() as sess:
-        sess.run(init)
-        for epoch in range(1, epoches + 1):
-            np.random.shuffle(x_train)
-            lbs = []
-            for t in range(iters):
-                x_batch = x_train[t * batch_size:(t + 1) * batch_size]
-                x_batch = np.random.binomial(
-                    n=1, p=x_batch, size=x_batch.shape).astype('float32')
-                _, lb = sess.run([infer1, lower_bound],
-                                 feed_dict={x: x_batch})
-                _, lb = sess.run([infer2, lower_bound],
-                                 feed_dict={x: x_batch})
-                lbs.append(lb)
-            print('Epoch {}: Lower bound = {}'.format(epoch, np.mean(lbs)))
-            if epoch % test_freq == 0:
-                test_lbs = []
-                test_lls = []
-                for t in range(test_iters):
-                    test_x_batch = x_test[
-                        t * test_batch_size: (t + 1) * test_batch_size]
-                    test_lb, test_ll = sess.run(
-                        [eval_lower_bound, eval_log_likelihood],
-                        feed_dict={x: test_x_batch}
-                    )
-                    test_lbs.append(test_lb)
-                    test_lls.append(test_ll)
-                print('>> Test lower bound = {}'.format(np.mean(test_lbs)))
-                print('>> Test log likelihood = {}'.format(np.mean(test_lls)))
+        params = tf.trainable_variables()
+        for i in params:
+            print(i.name, i.get_shape())
+ 
+        # Run the inference
+        #with tf.Session() as sess:
+        epoch = 0
+        with sv.managed_session(server.target) as sess:
+            #sess.run(init)
+            #for epoch in range(1, epoches + 1):
+            while not sv.should_stop() and epoch < epoches:
+                print(epoch)
+                np.random.shuffle(x_train)
+                lbs = []
+                for t in range(iters):
+                    print("t : ", t)
+                    x_batch = x_train[t * batch_size:(t + 1) * batch_size]
+                    x_batch = np.random.binomial(
+                        n=1, p=x_batch, size=x_batch.shape).astype('float32')
+                    _, lb = sess.run([infer1, lower_bound],
+                                     feed_dict={x: x_batch})
+                    _, lb = sess.run([infer2, lower_bound],
+                                     feed_dict={x: x_batch})
+                    lbs.append(lb)
+                print('Epoch {}: Lower bound = {}'.format(epoch, np.mean(lbs)))
+                epoch += 1
+            print("exit with")
+        sv.stop()
+        """
+                if epoch % test_freq == 0:
+                    test_lbs = []
+                    test_lls = []
+                    for t in range(test_iters):
+                        test_x_batch = x_test[
+                            t * test_batch_size: (t + 1) * test_batch_size]
+                        test_lb, test_ll = sess.run(
+                            [eval_lower_bound, eval_log_likelihood],
+                            feed_dict={x: test_x_batch}
+                        )
+                        test_lbs.append(test_lb)
+                        test_lls.append(test_ll)
+                    print('>> Test lower bound = {}'.format(np.mean(test_lbs)))
+                    print('>> Test log likelihood = {}'.format(np.mean(test_lls)))
+        """
