@@ -9,7 +9,8 @@ import os
 import time
 
 import tensorflow as tf
-import prettytensor as pt
+#import prettytensor as pt
+import tflearn
 from six.moves import range
 import numpy as np
 
@@ -38,6 +39,7 @@ class M1:
     def __init__(self, n_z, n_x):
         self.n_z = n_z
         self.n_x = n_x
+        """
         with pt.defaults_scope(activation_fn=tf.nn.relu,
                                scale_after_normalization=True):
             self.l_x_z = (pt.template('z').
@@ -46,6 +48,7 @@ class M1:
                           fully_connected(500).
                           batch_normalize().
                           fully_connected(n_x, activation_fn=tf.nn.sigmoid))
+        """
 
     def log_prob(self, z, x):
         """
@@ -58,7 +61,6 @@ class M1:
 
         :return: A Tensor of shape (batch_size, samples). The joint log
             likelihoods.
-        """
         l_x_z = self.l_x_z.construct(
             z=tf.reshape(z, ((-1, self.n_z)))).reshape(
             (-1, int(z.get_shape()[1]), self.n_x)).tensor
@@ -66,7 +68,20 @@ class M1:
             bernoulli.logpdf(tf.expand_dims(x, 1), l_x_z, eps=1e-6), 2)
         log_pz = tf.reduce_sum(norm.logpdf(z), 2)
         return log_px_z + log_pz
-
+        """
+        l_x_z = tf.reshape(z, (-1, int(z.get_shape()[2])))
+        l_x_z = tflearn.fully_connected(l_x_z, 500, activation='relu')
+        l_x_z = tflearn.batch_normalization(l_x_z)
+        l_x_z = tflearn.fully_connected(l_x_z, 500, activation='relu')
+        l_x_z = tflearn.batch_normalization(l_x_z)
+        l_x_z = tflearn.fully_connected(l_x_z, int(x.get_shape()[1]),
+                                        activation='sigmoid')
+        l_x_z = tf.reshape(l_x_z, (-1, int(z.get_shape()[1]),
+                                   int(x.get_shape()[1])))
+        l_x_z = bernoulli.logpdf(tf.expand_dims(x, 1), l_x_z, eps=1e-6)
+        log_px_z = tf.reduce_sum(l_x_z, 2)
+        log_pz = tf.reduce_sum(norm.logpdf(z), 2)
+        return log_px_z + log_pz
 
 def q_net(x, n_z):
     """
@@ -79,7 +94,6 @@ def q_net(x, n_z):
         variables.
     :return: A Tensor of shape (batch_size, n_z). Variational log standard
         deviation of latent variables.
-    """
     with pt.defaults_scope(activation_fn=tf.nn.relu,
                            scale_after_normalization=True):
         l_z_x = (pt.wrap(x).
@@ -90,7 +104,14 @@ def q_net(x, n_z):
         l_z_x_mean = l_z_x.fully_connected(n_z, activation_fn=None)
         l_z_x_logstd = l_z_x.fully_connected(n_z, activation_fn=None)
     return l_z_x_mean, l_z_x_logstd
-
+    """
+    l_z_x = tflearn.fully_connected(x, 500, activation='relu')
+    l_z_x = tflearn.batch_normalization(l_z_x)
+    l_z_x = tflearn.fully_connected(l_z_x, 500, activation='relu')
+    l_z_x = tflearn.batch_normalization(l_z_x)
+    l_z_x_mean = tflearn.fully_connected(l_z_x, n_z, activation='linear')
+    l_z_x_logstd = tflearn.fully_connected(l_z_x, n_z, activation='linear')
+    return l_z_x_mean, l_z_x_logstd
 
 def is_loglikelihood(model, x, z_proposal, n_samples=1000):
     """
@@ -166,7 +187,7 @@ if __name__ == "__main__":
     # Define training/evaluation parameters
     lb_samples = 1
     ll_samples = 5000
-    epoches = 3000
+    epoches = 30
     batch_size = 100
     test_batch_size = 100
     iters = x_train.shape[0] // batch_size
@@ -198,13 +219,14 @@ if __name__ == "__main__":
             x = tf.placeholder(tf.float32, shape=(None, x_train.shape[1]))
             optimizer = tf.train.AdamOptimizer(learning_rate=0.001, epsilon=1e-4)
             with tf.variable_scope("model") as scope:
-                with pt.defaults_scope(phase=pt.Phase.train):
-                    train_model = M1(n_z, x_train.shape[1])
+                train_model = M1(n_z, x_train.shape[1])
+                #with pt.defaults_scope(phase=pt.Phase.train):
             with tf.variable_scope("variational") as scope:
-                with pt.defaults_scope(phase=pt.Phase.train):
-                    train_vz_mean, train_vz_logstd = q_net(x, n_z)
-                    train_variational = ReparameterizedNormal(
-                        train_vz_mean, train_vz_logstd)
+                train_vz_mean, train_vz_logstd = q_net(x, n_z)
+                train_variational = ReparameterizedNormal(
+                    train_vz_mean, train_vz_logstd)
+                #with pt.defaults_scope(phase=pt.Phase.train):
+            """
             lower_bound = advi(
                 train_model, x, train_variational, lb_samples)
             grads1 = optimizer.compute_gradients(-lower_bound, var_list=[
@@ -214,6 +236,11 @@ if __name__ == "__main__":
             ])
             infer1 = optimizer.apply_gradients(grads1)
             infer2 = optimizer.apply_gradients(grads2)
+            """
+            grads, lower_bound = advi(
+                train_model, x, train_variational, lb_samples, optimizer)
+            infer = optimizer.apply_gradients(grads)
+
         
             """
             # Build the evaluation computation graph
@@ -256,20 +283,22 @@ if __name__ == "__main__":
         with sv.managed_session(server.target) as sess:
             #sess.run(init)
             #for epoch in range(1, epoches + 1):
-            while not sv.should_stop() and epoch < epoches:
+            while epoch < epoches:
                 print(epoch)
                 np.random.shuffle(x_train)
                 lbs = []
-                for t in range(iters):
-                    print("t : ", t)
+                t = 0
+                while not sv.should_stop() and t < iters:
+                #for t in range(iters):
+                    #print("t : ", t)
                     x_batch = x_train[t * batch_size:(t + 1) * batch_size]
                     x_batch = np.random.binomial(
                         n=1, p=x_batch, size=x_batch.shape).astype('float32')
-                    _, lb = sess.run([infer1, lower_bound],
+                    _, lb = sess.run([infer, lower_bound],
                                      feed_dict={x: x_batch})
-                    _, lb = sess.run([infer2, lower_bound],
-                                     feed_dict={x: x_batch})
+                    #_, lb = sess.run([infer2, lower_bound], feed_dict={x: x_batch})
                     lbs.append(lb)
+                    t += 1
                 print('Epoch {}: Lower bound = {}'.format(epoch, np.mean(lbs)))
                 epoch += 1
             print("exit with")
