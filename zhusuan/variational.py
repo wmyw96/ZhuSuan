@@ -85,9 +85,34 @@ class ReparameterizedNormal(Variational):
                         tf.expand_dims(tf.exp(self.vz_logstd), 1)), 2)
 
 
+"""
+def advi(model, x, variational, n_samples=1):
+    Implements the automatic differentiation variational inference (ADVI)
+    algorithm. For now we assume all latent variables have been transformed in
+    the model definition to have support on R^n.
+
+    :param model: An model object that has a method logprob(z, x) to compute
+        the log joint likelihood of the model.
+    :param x: 2-D Tensor of shape (batch_size, n_x). Observed data.
+    :param variational: A :class:`Variational` object.
+    :param n_samples: Int. Number of posterior samples used to
+        estimate the gradients. Default to be 1.
+    :param optimizer: Tensorflow optimizer object. Default to be
+        AdamOptimizer.
+
+    :return: Tensorflow gradients that can be applied using
+        `tf.train.Optimizer.apply_gradients`
+    :return: A 0-D Tensor. The variational lower bound.
+    samples = variational.sample(n_samples)
+    expected_log_joint = tf.reduce_mean(model.log_prob(samples, x))
+    entropy = tf.reduce_mean(-variational.logpdf(samples))
+    lower_bound = expected_log_joint + entropy
+    return lower_bound
+"""
+
 def advi(model, x, variational, n_samples=1,
          optimizer=tf.train.AdamOptimizer()):
-    """
+    """ 
     Implements the automatic differentiation variational inference (ADVI)
     algorithm. For now we assume all latent variables have been transformed in
     the model definition to have support on R^n.
@@ -109,3 +134,4 @@ def advi(model, x, variational, n_samples=1,
     lower_bound = model.log_prob(samples, x) - variational.logpdf(samples)
     lower_bound = tf.reduce_mean(lower_bound)
     return optimizer.compute_gradients(-lower_bound), lower_bound
+
