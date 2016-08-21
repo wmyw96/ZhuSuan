@@ -1,48 +1,51 @@
-G2="192.168.245.100:2333"
-G3="192.168.245.153:2333"
-G4="192.168.245.154:2333"
-G5="192.168.245.155:2333"
-G6="192.168.245.156:2333"
+G1="192.168.245.99"
+G2="192.168.245.100"
+G3="192.168.245.153"
+G4="192.168.245.154"
+G5="192.168.245.155"
+G6="192.168.245.156"
 
-USER="/home/yama"
-PROG="$USER/mfs/tf-dist/caicloud/mnist_cnn.py"
-PROG="$USER/mfs/tf-dist/mnist/mnist_replica.py"
-PROG="$USER/mfs/ZhuSuan-inter-node/examples/vae.py"
+HOME="/home/shizhen"
+PROG="$HOME/ZhuSuan/examples/vae.py"
+LOG_PATH="$HOME/ZhuSuan/logs"
+#WORKERS=2
 
-HOST=`hostname`
-
-if [[ $HOST == "jungpu3" ]]
-then
-	JOB_NAME="ps"
-	TASK_INDEX=0
-elif [[ $HOST == "jungpu5" ]]
-then
-	JOB_NAME="worker"
-	TASK_INDEX=0
-elif [[ $HOST == "jungpu6" ]]
-then
-	JOB_NAME="worker"
-	TASK_INDEX=1
-else
-	JOB_NAME="invalid"
-	TASK_INDEX=-1
-	echo "$HOST was not supposed to run $PROG"
+if [ "$#" -ne "2" ]; then
+    echo "Usage: $0 <JOB_NAME> <TASK_INDEX>"
+    exit -1
 fi
+PS_PORT=2222
+WORKER_PORT=3333
+JOB_NAME=$1
+TASK_INDEX=$2
 
-LOG_PATH="$USER/mfs/logs"
+PS_URL="$G1"
+PS_HOSTS=${PS_URL}":"${PS_PORT}
 
-WORKER_HOSTS="$G5,$G6"
-WORKER_GRPC_URL="grpc://$G5,grpc://$G6"
-WORKER_HOSTS="$G5"
-WORKER_GRPC_URL="grpc://$G5"
+WORKER_URL="$G5 $G6"
+#WORKER_URL="$G5"
+NUM_WORKERS=0
+
+for i in $WORKER_URL
+do
+    if [ "$WORKER_HOSTS" == "" ]; then
+        WORKER_HOSTS="${i}:${WORKER_PORT}"
+    else
+        WORKER_HOSTS="${WORKER_HOSTS},${i}:${WORKER_PORT}"
+    fi
+    ((NUM_WORKERS++))
+done
+
+
 
 CMD="python $PROG 
-	--ps_hosts=$G3
+	--ps_hosts=$PS_HOSTS
 	--worker_hosts=$WORKER_HOSTS
-	--worker_grpc_url=$WORKER_GRPC_URL
 	--job_name=$JOB_NAME 
-	--task_index=$TASK_INDEX"
+	--task_index=$TASK_INDEX
+	--num_workers=$NUM_WORKERS"
+
 
 echo $CMD
-echo "Log will save to $LOG_PATH/$JOB_NAME-$HOST.log"
-$CMD 2>&1 | tee $LOG_PATH/$JOB_NAME-$HOST.log
+echo "Log will save to $LOG_PATH/$JOB_NAME-$TASK_INDEX.log"
+$CMD 2>&1 | tee $LOG_PATH/$JOB_NAME-$TASK_INDEX.log

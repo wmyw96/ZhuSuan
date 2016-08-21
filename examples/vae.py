@@ -11,6 +11,7 @@ import tensorflow as tf
 import prettytensor as pt
 from six.moves import range
 import numpy as np
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
@@ -26,6 +27,28 @@ try:
 except:
     raise ImportError()
 
+FLAGS = tf.app.flags.FLAGS
+tf.app.flags.DEFINE_string('job_name', '', 'One of "ps", "worker"')
+tf.app.flags.DEFINE_string('ps_hosts', '',
+                           """Comma-separated list of hostname:port for the """
+                           """parameter server jobs. e.g. """
+                           """'machine1:2222,machine2:1111,machine2:2222'""")
+tf.app.flags.DEFINE_string('worker_hosts', '',
+                           """Comma-separated list of hostname:port for the """
+                           """worker jobs. e.g. """
+                           """'machine1:2222,machine2:1111,machine2:2222'""")
+# Task ID is used to select the chief and also to access the local_step for
+# each replica to check staleness of the gradients in sync_replicas_optimizer.
+tf.app.flags.DEFINE_integer(
+            'task_index', 0, 'Task ID of the worker/replica running the training.')
+tf.app.flags.DEFINE_boolean('log_device_placement', False,
+                            'Whether to log device placement.')
+tf.app.flags.DEFINE_integer('save_interval_secs', 10 * 60,
+                            'Save interval seconds.')
+tf.app.flags.DEFINE_integer('save_summaries_secs', 180,
+                            'Save summaries interval seconds.')
+tf.app.flags.DEFINE_integer("num_workers", None,
+                            "Total number of workers (must be >= 1)")
 
 class M1:
     """
@@ -112,6 +135,21 @@ def is_loglikelihood(model, x, z_proposal, n_samples=1000):
 
 
 if __name__ == "__main__":
+    ############################################################################
+    #Parse the parameter server and worker address
+    ps_hosts = FLAGS.ps_hosts.split(",")
+    print (ps_hosts)
+    worker_hosts = FLAGS.worker_hosts.split(",")
+    print (worker_hosts)
+
+    # Create a cluster from the parameter server and worker hosts.
+    cluster = tf.train.ClusterSpec({"ps": ps_hosts, "worker": worker_hosts})
+
+    # Create and start a server for the local task.
+    server = tf.train.Server(cluster,
+                             job_name = FLAGS.job_name,
+                             task_index = FLAGS.task_index)
+    ############################################################################
     tf.set_random_seed(1234)
 
     # Load MNIST
@@ -136,52 +174,96 @@ if __name__ == "__main__":
     test_iters = x_test.shape[0] // test_batch_size
     test_freq = 10
 
-    # Build the training computation graph
-    x = tf.placeholder(tf.float32, shape=(None, x_train.shape[1]))
-    optimizer = tf.train.AdamOptimizer(learning_rate=0.001, epsilon=1e-4)
-    with pt.defaults_scope(phase=pt.Phase.train):
-        with tf.variable_scope("model") as scope:
-            train_model = M1(n_z, x_train.shape[1])
-        with tf.variable_scope("variational") as scope:
-            train_vz_mean, train_vz_logstd = q_net(x, n_z)
-            train_variational = ReparameterizedNormal(
-                train_vz_mean, train_vz_logstd)
-    grads, lower_bound = advi(
-        train_model, x, train_variational, lb_samples, optimizer)
-    infer = optimizer.apply_gradients(grads)
 
-    # Build the evaluation computation graph
-    with pt.defaults_scope(phase=pt.Phase.test):
-        with tf.variable_scope("model", reuse=True) as scope:
-            eval_model = M1(n_z, x_train.shape[1])
-        with tf.variable_scope("variational", reuse=True) as scope:
-            eval_vz_mean, eval_vz_logstd = q_net(x, n_z)
-            eval_variational = ReparameterizedNormal(
-                eval_vz_mean, eval_vz_logstd)
-    eval_lower_bound = is_loglikelihood(
-        eval_model, x, eval_variational, lb_samples)
-    eval_log_likelihood = is_loglikelihood(
-        eval_model, x, eval_variational, ll_samples)
+    ############################################################################
+    if FLAGS.job_name == "ps":
+        server.join()
+    elif FLAGS.job_name == "worker":
+        #Assign following operators to workers by default
+        with tf.device(tf.train.replica_device_setter(
+            worker_device="/job:worker/task:%d" % FLAGS.task_index,
+            cluster=cluster)):
+            # Optimizer: set up a variable that's incremented once per batch and
+            # controls the learning rate decay.
+            global_step = tf.Variable(0)
+            is_chief = (FLAGS.task_index == 0)
+    ############################################################################
+            # Build the training computation graph
+            x = tf.placeholder(tf.float32, shape=(None, x_train.shape[1]))
+            optimizer = tf.train.AdamOptimizer(learning_rate=0.001, epsilon=1e-4)
+            optimizer = tf.train.SyncReplicasOptimizer(#synchronous optimizer
+                            optimizer,
+                            replicas_to_aggregate=FLAGS.num_workers,
+                            total_num_replicas=FLAGS.num_workers,
+                            replica_id=FLAGS.task_index)
+            with pt.defaults_scope(phase=pt.Phase.train):
+                with tf.variable_scope("model") as scope:
+                    train_model = M1(n_z, x_train.shape[1])
+                with tf.variable_scope("variational") as scope:
+                    train_vz_mean, train_vz_logstd = q_net(x, n_z)
+                    train_variational = ReparameterizedNormal(
+                        train_vz_mean, train_vz_logstd)
+            grads, lower_bound = advi(
+                train_model, x, train_variational, lb_samples, optimizer)
+            infer = optimizer.apply_gradients(grads, global_step=global_step)
 
-    params = tf.trainable_variables()
-    for i in params:
-        print(i.name, i.get_shape())
+            # Build the evaluation computation graph
+            with pt.defaults_scope(phase=pt.Phase.test):
+                with tf.variable_scope("model", reuse=True) as scope:
+                    eval_model = M1(n_z, x_train.shape[1])
+                with tf.variable_scope("variational", reuse=True) as scope:
+                    eval_vz_mean, eval_vz_logstd = q_net(x, n_z)
+                    eval_variational = ReparameterizedNormal(
+                        eval_vz_mean, eval_vz_logstd)
+            eval_lower_bound = is_loglikelihood(
+                eval_model, x, eval_variational, lb_samples)
+            eval_log_likelihood = is_loglikelihood(
+                eval_model, x, eval_variational, ll_samples)
 
-    init = tf.initialize_all_variables()
+            params = tf.trainable_variables()
+            for i in params:
+                print(i.name, i.get_shape())
+            
+            if is_chief:
+            # Initial token and chief queue runners required by the sync_replicas mode
+                chief_queue_runner = optimizer.get_chief_queue_runner()
+                init_tokens_op = optimizer.get_init_tokens_op()
 
+        saver = tf.train.Saver()
+        summary = tf.merge_all_summaries()
+        init = tf.initialize_all_variables()
+    ############################################################################
+    # Create a "supervisor", which oversees the training process.
+    sv = tf.train.Supervisor(is_chief = is_chief,
+                             init_op = init,
+                             summary_op = summary,
+                             saver = saver,
+                             global_step = global_step,
+                             save_model_secs = FLAGS.save_interval_secs)
+    # Create a local session to run the training.
+    config = tf.ConfigProto(allow_soft_placement=True,
+                            log_device_placement=FLAGS.log_device_placement)
+    with sv.prepare_or_wait_for_session(server.target, config=config) as sess:
+        if is_chief:
+            # Chief worker will start the chief queue runner and call the init op
+            print("Starting chief queue runner and running init_tokens_op")
+            sv.start_queue_runners(sess, [chief_queue_runner])
+            sess.run(init_tokens_op)
+    ############################################################################
     # Run the inference
-    with tf.Session() as sess:
-        sess.run(init)
+    #with tf.Session() as sess:
+        #sess.run(init)
         for epoch in range(1, epoches + 1):
             np.random.shuffle(x_train)
             lbs = []
             for t in range(iters):
+                sys.stdout.flush()
                 x_batch = x_train[t * batch_size:(t + 1) * batch_size]
                 x_batch = np.random.binomial(
                     n=1, p=x_batch, size=x_batch.shape).astype('float32')
                 _, lb = sess.run([infer, lower_bound], feed_dict={x: x_batch})
                 lbs.append(lb)
-            print('Epoch {}: Lower bound = {}'.format(epoch, np.mean(lbs)))
+            print('Epoch {}: Lower bound = {}, timestamp = {}'.format(epoch, np.mean(lbs), datetime.now()))
             if epoch % test_freq == 0:
                 test_lbs = []
                 test_lls = []
@@ -196,3 +278,7 @@ if __name__ == "__main__":
                     test_lls.append(test_ll)
                 print('>> Test lower bound = {}'.format(np.mean(test_lbs)))
                 print('>> Test log likelihood = {}'.format(np.mean(test_lls)))
+    ############################################################################
+    # Ask for all the services to stop.
+    sv.stop()
+    ############################################################################
