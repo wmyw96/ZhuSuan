@@ -7,10 +7,13 @@ from __future__ import division
 import tensorflow as tf
 import numpy as np
 
+from .utils import as_tensor, add_name_scope
+
 
 __all__ = [
     'norm',
     'bernoulli',
+    'discrete',
 ]
 
 
@@ -21,6 +24,7 @@ class Normal:
     def __init__(self):
         pass
 
+    @add_name_scope
     def rvs(self, loc=0., scale=1., size=None):
         """
         Generate random independent normal samples which form a tensor of
@@ -38,9 +42,12 @@ class Normal:
         :return: A Tensor of specified shape filled with random i.i.d. normal
             samples.
         """
+        loc = tf.cast(as_tensor(loc), dtype=tf.float32)
+        scale = tf.cast(as_tensor(scale), dtype=tf.float32)
         return tf.random_normal(size, tf.stop_gradient(loc),
                                 tf.stop_gradient(scale))
 
+    @add_name_scope
     def logpdf(self, x, loc=0., scale=1.):
         """
         Log probability density function of Normal distribution.
@@ -53,10 +60,11 @@ class Normal:
 
         :return: A Tensor of the same shape as `x` with function values.
         """
-        x = tf.cast(x, dtype=tf.float32)
-        loc = tf.cast(loc, dtype=tf.float32)
-        scale = tf.cast(scale, dtype=tf.float32)
+        x = tf.cast(as_tensor(x), dtype=tf.float32)
+        loc = tf.cast(as_tensor(loc), dtype=tf.float32)
+        scale = tf.cast(as_tensor(scale), dtype=tf.float32)
         c = -0.5 * np.log(2 * np.pi)
+        # diff = tf.Print(x - loc, [tf.reduce_min(tf.abs(x - loc))])
         return c - tf.log(scale) - (x - loc)**2 / (2 * scale**2)
 
 
@@ -67,6 +75,7 @@ class Bernoulli:
     def __init__(self):
         pass
 
+    @add_name_scope
     def rvs(self, p, size=None):
         """
         Not implemented for now due to absence of Bernoulli in Tensorflow.
@@ -81,12 +90,13 @@ class Bernoulli:
         """
         raise NotImplementedError()
 
+    @add_name_scope
     def logpdf(self, x, p, eps=1e-6):
         """
         Log probability density function of Bernoulli distribution.
 
-        :param x: A Tensor. The value at which to evaluate the log density
-            function.
+        :param x: A Tensor or numpy array. The value at which to evaluate the
+            log density function.
         :param p: A Tensor or numpy array. The probability of 1. Can be
             broadcast to the size of `x`.
         :param eps: Float. Small value used to avoid NaNs by clipping p in
@@ -95,11 +105,61 @@ class Bernoulli:
 
         :return: A Tensor of the same shape as `x` with function values.
         """
-        x = tf.cast(x, dtype=tf.float32)
-        p = tf.cast(p, dtype=tf.float32)
+        x = tf.cast(as_tensor(x), dtype=tf.float32)
+        p = tf.cast(as_tensor(p), dtype=tf.float32)
         p = tf.clip_by_value(p, eps, 1. - eps)
         return x * tf.log(p) + (1. - x) * tf.log(1. - p)
 
 
+class Discrete:
+    """
+    Class of discrete distribution.
+    """
+    def __init__(self):
+        pass
+
+    @add_name_scope
+    def rvs(self, p):
+        """
+        Generate discrete variables.
+
+        :param p: A 2-D Tensor or numpy array of shape (n_samples, n_classes).
+            Each line is the probability of all classes. (Not required to be
+            normalized).
+
+        :return: A 2-D Tensor of shape (n_samples, n_classes). Each line is
+            a one-hot vector of the sample.
+        """
+        p = tf.cast(as_tensor(p), dtype=tf.float32)
+        tf.assert_rank(p, 2)
+        return tf.one_hot(
+            tf.squeeze(tf.multinomial(tf.stop_gradient(p), 1), [1]),
+            tf.shape(p)[1])
+
+    @add_name_scope
+    def logpdf(self, x, p, eps=1e-8):
+        """
+        Log probability density function of Bernoulli distribution.
+
+        :param x: A 2-D Tensor or numpy array of shape (n_samples, n_classes).
+            The value at which to evaluate the log density function (one-hot).
+        :param p: A 2-D Tensor or numpy array of shape (n_samples, n_classes).
+            Each line is the probability of all classes. (Not required to be
+            normalized).
+        :param eps: Float. Small value used to avoid NaNs by clipping p in
+            range (eps, 1).
+
+        :return: A 1-D Tensor of shape (n_samples,).
+        """
+        x = tf.cast(as_tensor(x), dtype=tf.float32)
+        p = tf.cast(as_tensor(p), dtype=tf.float32)
+        tf.assert_rank(x, 2)
+        tf.assert_rank(p, 2)
+        p = p / tf.reduce_sum(p, 1, keep_dims=True)
+        p = tf.clip_by_value(p, eps, 1.)
+        return tf.reduce_sum(x * tf.log(p), 1) / tf.reduce_sum(p, 1)
+
+
 norm = Normal()
 bernoulli = Bernoulli()
+discrete = Discrete()
