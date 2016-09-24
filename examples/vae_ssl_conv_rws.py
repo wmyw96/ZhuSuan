@@ -47,15 +47,29 @@ class M2(object):
 
     def p_net(self):
         with pt.defaults_scope(activation_fn=tf.nn.relu):
+            # sym_y = pt.template('y')
+            # sym_y_dim4 = sym_y.reshape([-1, 1, 1, self.n_y])
+            # y_7_7 = sym_y_dim4.apply(tf.tile, [1, 7, 7, 1])
+            # y_14_14 = sym_y_dim4.apply(tf.tile, [1, 14, 14, 1])
+            # l_x_zy = (pt.template('z').join([sym_y]).
+            #           fully_connected(1024).
+            #           join([sym_y]).
+            #           fully_connected(32 * 2 * 7 * 7).
+            #           reshape([-1, 7, 7, 32 * 2]).
+            #           concat(concat_dim=3, other_tensors=[y_7_7]).
+            #           deconv2d(5, 32, stride=2).
+            #           concat(concat_dim=3, other_tensors=[y_14_14]).
+            #           deconv2d(5, 1, stride=2, activation_fn=tf.nn.sigmoid))
             sym_y = pt.template('y')
             sym_y_dim4 = sym_y.reshape([-1, 1, 1, self.n_y])
+            y_3_3 = sym_y_dim4.apply(tf.tile, [1, 3, 3, 1])
             y_7_7 = sym_y_dim4.apply(tf.tile, [1, 7, 7, 1])
             y_14_14 = sym_y_dim4.apply(tf.tile, [1, 14, 14, 1])
             l_x_zy = (pt.template('z').join([sym_y]).
-                      fully_connected(1024).
-                      join([sym_y]).
-                      fully_connected(32 * 2 * 7 * 7).
-                      reshape([-1, 7, 7, 32 * 2]).
+                      reshape([-1, 1, 1, self.n_z + self.n_y]).
+                      deconv2d(3, 128, edges='VALID').
+                      concat(concat_dim=3, other_tensors=[y_3_3]).
+                      deconv2d(5, 64, edges='VALID').
                       concat(concat_dim=3, other_tensors=[y_7_7]).
                       deconv2d(5, 32, stride=2).
                       concat(concat_dim=3, other_tensors=[y_14_14]).
@@ -134,12 +148,23 @@ def q_net(n_x, n_y, n_z, n_samples):
     :return: All :class:`Layer` instances needed.
     """
     with pt.defaults_scope(activation_fn=tf.nn.relu):
+        # qy_x = (pt.template('x').
+        #         reshape([-1, 28, 28, 1]).
+        #         conv2d(5, 32, stride=2).
+        #         conv2d(5, 64, stride=2).
+        #         flatten().
+        #         fully_connected(1024).
+        #         fully_connected(n_y, activation_fn=tf.nn.softmax))
         qy_x = (pt.template('x').
                 reshape([-1, 28, 28, 1]).
-                conv2d(5, 32, stride=2).
-                conv2d(5, 64, stride=2).
+                conv2d(3, 32).
+                conv2d(3, 32).
+                max_pool(2, 2).
+                conv2d(3, 64).
+                conv2d(3, 64).
+                max_pool(2, 2).
                 flatten().
-                fully_connected(1024).
+                fully_connected(500).
                 fully_connected(n_y, activation_fn=tf.nn.softmax))
         sym_y_dim4 = pt.template('y').reshape([-1, 1, 1, n_y])
         y_28 = sym_y_dim4.apply(tf.tile, [1, 28, 28, 1])
@@ -155,7 +180,7 @@ def q_net(n_x, n_y, n_z, n_samples):
                  # batch_normalize(scale_after_normalization=True).
                  concat(3, [y_7]).
                  conv2d(5, 128, edges='VALID').
-                 dropout(0.9).
+                 # dropout(0.9).
                  flatten())
         qz_mean = (pt.template('z_hid').
                    fully_connected(n_z, activation_fn=None))
