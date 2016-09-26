@@ -343,7 +343,7 @@ if __name__ == "__main__":
                     m2_labeled, labeled_observed, labeled_latent, reduction_indices=1)
                 labeled_cost = tf.reduce_mean(labeled_cost)
                 labeled_log_likelihood = tf.reduce_mean(labeled_log_likelihood)
-                tower_labeled_log_likelihood.append(labeled_log_likelihood)
+                tower_labeled_log_likelihood.append(tf.expand_dims(labeled_log_likelihood, 0))
 
                 # Unlabeled
                 x_unlabeled_ph = tf.placeholder(tf.float32, shape=(None, n_x))
@@ -361,7 +361,7 @@ if __name__ == "__main__":
                     reduction_indices=1)
                 unlabeled_cost = tf.reduce_mean(unlabeled_cost)
                 unlabeled_log_likelihood = tf.reduce_mean(unlabeled_log_likelihood)
-                tower_unlabeled_log_likelihood.append(unlabeled_log_likelihood)
+                tower_unlabeled_log_likelihood.append(tf.expand_dims(unlabeled_log_likelihood, 0))
 
 
                 # Build classifier
@@ -370,7 +370,7 @@ if __name__ == "__main__":
                 acc = tf.reduce_sum(
                     tf.cast(tf.equal(pred_y, tf.argmax(y_labeled_ph, 1)), tf.float32) /
                     tf.cast(tf.shape(y_labeled_ph)[0], tf.float32))
-                tower_acc.append(acc)
+                tower_acc.append(tf.expand_dims(acc, 0))
                 log_qy_x = discrete.logpdf(y_labeled_ph, y, eps=1e-8)
                 classifier_cost = -beta * tf.reduce_mean(log_qy_x)
 
@@ -381,6 +381,11 @@ if __name__ == "__main__":
                 #infer = optimizer.apply_gradients(grads)
 
         infer = optimizer.apply_gradients(average_gradients(tower_grads))
+        labeled_log_likelihood = \
+                tf.reduce_mean(tf.concat(0, tower_labeled_log_likelihood), 0)
+        unlabeled_log_likelihood = \
+                tf.reduce_mean(tf.concat(0, tower_unlabeled_log_likelihood), 0)
+        acc = tf.reduce_mean(tf.concat(0, tower_acc), 0)
         params = tf.trainable_variables()
         for i in params:
             print(i.name, i.get_shape())
@@ -430,7 +435,7 @@ if __name__ == "__main__":
                                    #learning_rate_ph: learning_rate,
                                    #n_samples: ll_samples})
                     _, ll_labeled, ll_unlabeled, train_acc = sess.run(
-                        [infer, tower_labeled_log_likelihood[0], tower_unlabeled_log_likelihood[0], tower_acc[0]],
+                        [infer, labeled_log_likelihood, unlabeled_log_likelihood, acc],
                         feed_dict=feed_dict)
                     lls_labeled.append(ll_labeled)
                     lls_unlabeled.append(ll_unlabeled)
@@ -468,7 +473,7 @@ if __name__ == "__main__":
                                        #x_unlabeled_ph: test_x_batch,
                                        #n_samples: ll_samples})
                         test_ll_labeled, test_ll_unlabeled, test_acc = sess.run(
-                            [tower_labeled_log_likelihood[0], tower_unlabeled_log_likelihood[0], tower_acc[0]],
+                            [labeled_log_likelihood, unlabeled_log_likelihood, acc],
                             feed_dict=feed_dict) 
                         test_lls_labeled.append(test_ll_labeled)
                         test_lls_unlabeled.append(test_ll_unlabeled)
