@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+# !/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 from __future__ import absolute_import
@@ -12,7 +12,7 @@ import tensorflow as tf
 import prettytensor as pt
 from six.moves import range
 import numpy as np
-
+from collections import namedtuple
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from zhusuan.distributions import norm, bernoulli
@@ -27,34 +27,33 @@ try:
     from deconv import deconv2d
 except:
     raise ImportError()
-tf.app.flags.DEFINE_integer('num_gpus', 2, "How many GPUs to use")
-tf.app.flags.DEFINE_string('master_device', "/gpu:0", 
-                           "Using which gpu to merge gradients")
+tf.app.flags.DEFINE_integer('num_gpus', 2, """How many GPUs to use""")
+tf.app.flags.DEFINE_string('master_device', "/gpu:0",
+                           """Using which gpu to merge gradients""")
 FLAGS = tf.app.flags.FLAGS
 
 
 def average_gradients(tower_grads):
-    """
-    Calculate the average gradient for each shared variable across all towers.
+    """Calculate the average gradient for each shared variable across all towers.
 
     Note that this function provides a synchronization point across all towers.
 
     Args:
-        tower_grads: List of lists of (gradient, variable) tuples. The outer list
-            is over individual gradients. The inner list is over the gradient
-            calculation for each tower.
+      tower_grads: List of lists of (gradient, variable) tuples. The outer list
+        is over individual gradients. The inner list is over the gradient
+        calculation for each tower.
     Returns:
-         List of pairs of (gradient, variable) where the gradient has been averaged
-         across all towers.
+       List of pairs of (gradient, variable) where the gradient has been averaged
+       across all towers.
     """
     average_grads = []
     for grad_and_vars in zip(*tower_grads):
         # Note that each grad_and_vars looks like the following:
-        #     ((grad0_gpu0, var0_gpu0), ... , (grad0_gpuN, var0_gpuN))
+        #   ((grad0_gpu0, var0_gpu0), ... , (grad0_gpuN, var0_gpuN))
         grads = []
         none_val = False
         for g, _ in grad_and_vars:
-            if g == None :
+            if g == None:
                 none_val = True
                 break
             # Add 0 dimension to the gradients to represent the tower.
@@ -62,7 +61,7 @@ def average_gradients(tower_grads):
 
             # Append on a 'tower' dimension which we will average over below.
             grads.append(expanded_g)
-        
+
         if none_val:
             continue
 
@@ -89,6 +88,7 @@ class M2(object):
         classes.
     :param n_z: Int. The dimension of latent variables (z).
     """
+
     def __init__(self, n_x, n_y, n_z):
         self.n_y = n_y
         self.n_z = n_z
@@ -97,19 +97,6 @@ class M2(object):
 
     def p_net(self):
         with pt.defaults_scope(activation_fn=tf.nn.relu):
-            # sym_y = pt.template('y')
-            # sym_y_dim4 = sym_y.reshape([-1, 1, 1, self.n_y])
-            # y_7_7 = sym_y_dim4.apply(tf.tile, [1, 7, 7, 1])
-            # y_14_14 = sym_y_dim4.apply(tf.tile, [1, 14, 14, 1])
-            # l_x_zy = (pt.template('z').join([sym_y]).
-            #           fully_connected(1024).
-            #           join([sym_y]).
-            #           fully_connected(32 * 2 * 7 * 7).
-            #           reshape([-1, 7, 7, 32 * 2]).
-            #           concat(concat_dim=3, other_tensors=[y_7_7]).
-            #           deconv2d(5, 32, stride=2).
-            #           concat(concat_dim=3, other_tensors=[y_14_14]).
-            #           deconv2d(5, 1, stride=2, activation_fn=tf.nn.sigmoid))
             sym_y = pt.template('y')
             sym_y_dim4 = sym_y.reshape([-1, 1, 1, self.n_y])
             y_3_3 = sym_y_dim4.apply(tf.tile, [1, 3, 3, 1])
@@ -197,26 +184,51 @@ def q_net(n_x, n_y, n_z, n_samples):
 
     :return: All :class:`Layer` instances needed.
     """
-    with pt.defaults_scope(activation_fn=tf.nn.relu):
-        # qy_x = (pt.template('x').
-        #         reshape([-1, 28, 28, 1]).
-        #         conv2d(5, 32, stride=2).
-        #         conv2d(5, 64, stride=2).
-        #         flatten().
-        #         fully_connected(1024).
-        #         fully_connected(n_y, activation_fn=tf.nn.softmax))
-        qy_x = (pt.template('x').
-                reshape([-1, 28, 28, 1]).
-                conv2d(3, 32).
-                conv2d(3, 32).
-                max_pool(2, 2).
-                conv2d(3, 64).
-                conv2d(3, 64).
-                max_pool(2, 2).
+    with pt.defaults_scope(activation_fn=tf.nn.relu,
+                           scale_after_normalization=None
+                           ):
+        # Configurations for each bottleneck group.
+        BottleneckGroup = namedtuple(
+            'BottleneckGroup', ['num_blocks', 'num_filters', 'bottleneck_size'])
+        groups = [BottleneckGroup(1, 128, 32),
+                  BottleneckGroup(1, 256, 64),
+                  BottleneckGroup(1, 512, 128),
+                  BottleneckGroup(1, 1024, 256)]
+        res_in = (pt.template('x').
+                  reshape([-1, 28, 28, 1]).
+                  conv2d(7, 64, bias=False, batch_normalize=False).
+                  max_pool(kernel=3, stride=2, edges='SAME').
+                  conv2d(1, groups[0].num_filters, edges='VALID'))
+
+        seq = res_in.sequential()
+        for group_i, group in enumerate(groups):
+            for block_i in range(group.num_blocks):
+                name = 'group_%d/block_%d' % (group_i, block_i)
+                with seq.subdivide_with(branches=2,
+                                        join_function=lambda x: tf.add(*x),
+                                        name=name) as towers:
+                    towers[0].conv2d(
+                        1, group.bottleneck_size, edges='VALID',
+                        batch_normalize=False, bias=False).conv2d(
+                        3, group.bottleneck_size, edges='SAME',
+                        batch_normalize=False, bias=False).conv2d(
+                        1, group.num_filters, edges='VALID',
+                        batch_normalize=False, bias=False)
+                    towers[1].apply(tf.identity)
+            try:
+                next_group = groups[group_i + 1]
+                seq.conv2d(1, next_group.num_filters, edges='SAME',
+                           bias=False)
+            except IndexError:
+                pass
+        res_out = seq.as_layer()
+        qy_x = (res_out.
+                average_pool(kernel=(14, 14),
+                             stride=1, edges='VALID').
                 flatten().
-                fully_connected(500).
-                fully_connected(n_y, activation_fn=tf.nn.softmax))
-        
+                fully_connected(n_y, activation_fn=tf.nn.softmax)
+                )
+
         sym_y_dim4 = pt.template('y').reshape([-1, 1, 1, n_y])
         y_28 = sym_y_dim4.apply(tf.tile, [1, 28, 28, 1])
         y_14 = sym_y_dim4.apply(tf.tile, [1, 14, 14, 1])
@@ -224,14 +236,11 @@ def q_net(n_x, n_y, n_z, n_samples):
         qz_xy = (pt.template('x').
                  reshape([-1, 28, 28, 1]).
                  concat(3, [y_28]).
-                 conv2d(5, 32, stride=2).
-                 # batch_normalize(scale_after_normalization=True).
+                 conv2d(5, 32, stride=2, batch_normalize=False).
                  concat(3, [y_14]).
-                 conv2d(5, 64, stride=2).
-                 # batch_normalize(scale_after_normalization=True).
+                 conv2d(5, 64, stride=2, batch_normalize=False).
                  concat(3, [y_7]).
                  conv2d(5, 128, edges='VALID').
-                 # dropout(0.9).
                  flatten())
         qz_mean = (pt.template('z_hid').
                    fully_connected(n_z, activation_fn=None))
@@ -275,7 +284,7 @@ def q_net(n_x, n_y, n_z, n_samples):
         lz_u = ReparameterizedNormal([lz_mean_u, lz_logvar_u])
 
     return lx, ly, lz, lz_mean, lz_logvar, lx_u, ly_u, lz_u, \
-        lz_mean_u, lz_logvar_u, qy_x
+           lz_mean_u, lz_logvar_u, qy_x
 
 
 if __name__ == "__main__":
@@ -323,15 +332,17 @@ if __name__ == "__main__":
         for i in xrange(FLAGS.num_gpus):
             with tf.device('/gpu:%d' % i):
                 reuse = None
-                if i > 0 : reuse = True
+                if i > 0:
+                    reuse = True
+                # with pt.defaults_scope(phase=pt.Phase.train):
                 with tf.variable_scope("model", reuse=reuse) as scope:
                     m2_labeled = M2Labeled(n_x, n_y, n_z)
                 with tf.variable_scope("model", reuse=True) as scope:
                     m2_unlabeled = M2Unlabeled(n_x, n_y, n_z)
                 with tf.variable_scope("q_net", reuse=reuse) as scope:
-                    lx, ly, lz, lz_mean, lz_logvar, lx_u, ly_u, lz_u, \
-                        lz_mean_u, lz_logvar_u, qy_x = q_net(n_x, n_y,
-                                                             n_z, n_samples)
+                    lx, ly, lz, lz_mean, lz_logvar, lx_u, ly_u, \
+                    lz_u, lz_mean_u, lz_logvar_u, \
+                    qy_x = q_net(n_x, n_y, n_z, n_samples)
 
                 # Labeled
                 x_labeled_ph = tf.placeholder(tf.float32, shape=(None, n_x))
@@ -371,7 +382,6 @@ if __name__ == "__main__":
                 unlabeled_log_likelihood = tf.reduce_mean(
                     unlabeled_log_likelihood)
                 tower_unlabeled_log_likelihood.append(unlabeled_log_likelihood)
-
 
                 # Build classifier
                 y = qy_x.construct(x=x_labeled_ph).tensor
@@ -414,15 +424,15 @@ if __name__ == "__main__":
                 lls_unlabeled = []
                 train_accs = []
                 replica_batch_size = batch_size // FLAGS.num_gpus
-                feed_dict={}
+                feed_dict = {}
                 for t in range(iters):
                     for idx in range(FLAGS.num_gpus):
-                        labeled_indices = np.random.randint(
-                            0, n_labeled, size=replica_batch_size)
+                        labeled_indices = np.random.randint(0, n_labeled,
+                                                            size=replica_batch_size)
                         x_labeled_batch = x_labeled[labeled_indices]
                         y_labeled_batch = t_labeled[labeled_indices]
                         x_unlabeled_batch = x_unlabeled[t * batch_size:
-                                                        (t + 1) * batch_size]
+                        (t + 1) * batch_size]
                         x_labeled_batch = np.random.binomial(
                             n=1, p=x_labeled_batch,
                             size=x_labeled_batch.shape).astype('float32')
@@ -432,21 +442,22 @@ if __name__ == "__main__":
                             size=x_unlabeled_batch.shape).astype('float32')
                         feed_dict[feed_x_labeled_ph[idx]] = x_labeled_batch
                         feed_dict[feed_y_labeled_ph[idx]] = y_labeled_batch
-                        feed_dict[feed_x_unlabeled_ph[idx]] =  \
-                            x_unlabeled_batch[
-                            idx*replica_batch_size:(idx+1)*replica_batch_size]
+                        feed_dict[feed_x_unlabeled_ph[idx]] = \
+                            x_unlabeled_batch[idx * replica_batch_size:(
+                                                                       idx + 1) * replica_batch_size]
                         feed_dict[learning_rate_ph] = learning_rate
-                        feed_dict[n_samples] = ll_samples 
-                    #_, ll_labeled, ll_unlabeled, train_acc = sess.run(
-                        #[infer, labeled_log_likelihood, unlabeled_log_likelihood,
-                         #acc],
-                        #feed_dict={x_labeled_ph: x_labeled_batch,
-                                   #y_labeled_ph: y_labeled_batch,
-                                   #x_unlabeled_ph: x_unlabeled_batch,
-                                   #learning_rate_ph: learning_rate,
-                                   #n_samples: ll_samples})
+                        feed_dict[n_samples] = ll_samples
+                        # _, ll_labeled, ll_unlabeled, train_acc = sess.run(
+                        # [infer, labeled_log_likelihood, unlabeled_log_likelihood,
+                        # acc],
+                        # feed_dict={x_labeled_ph: x_labeled_batch,
+                        # y_labeled_ph: y_labeled_batch,
+                        # x_unlabeled_ph: x_unlabeled_batch,
+                        # learning_rate_ph: learning_rate,
+                        # n_samples: ll_samples})
                     _, ll_labeled, ll_unlabeled, train_acc = sess.run(
-                        [infer, labeled_log_likelihood, unlabeled_log_likelihood, acc],
+                        [infer, labeled_log_likelihood,
+                         unlabeled_log_likelihood, acc],
                         feed_dict=feed_dict)
                     lls_labeled.append(ll_labeled)
                     lls_unlabeled.append(ll_unlabeled)
@@ -455,7 +466,8 @@ if __name__ == "__main__":
                 print('Epoch {} ({:.1f}s), log likelihood: labeled = {}, '
                       'unlabeled = {} Accuracy: {:.2f}%'.
                       format(epoch, time_epoch, np.mean(lls_labeled),
-                             np.mean(lls_unlabeled), np.mean(train_accs) * 100.))
+                             np.mean(lls_unlabeled),
+                             np.mean(train_accs) * 100.))
                 if epoch % test_freq == 0:
                     time_test = -time.time()
                     test_lls_labeled = []
@@ -466,33 +478,40 @@ if __name__ == "__main__":
                     for t in range(test_iters):
                         for idx in range(FLAGS.num_gpus):
                             test_x_batch = x_test[
-                                t * test_batch_size: (t + 1) * test_batch_size]
+                                           t * test_batch_size: (
+                                                                t + 1) * test_batch_size]
                             test_y_batch = t_test[
-                                t * test_batch_size: (t + 1) * test_batch_size]
+                                           t * test_batch_size: (
+                                                                t + 1) * test_batch_size]
                             feed_dict[feed_x_labeled_ph[idx]] = \
-                                    test_x_batch[idx*replica_test_batch_size:(idx+1)*replica_test_batch_size]
+                                test_x_batch[idx * replica_test_batch_size:(
+                                                                           idx + 1) * replica_test_batch_size]
                             feed_dict[feed_y_labeled_ph[idx]] = \
-                                    test_y_batch[idx*replica_test_batch_size:(idx+1)*replica_test_batch_size]
-                            feed_dict[feed_x_unlabeled_ph[idx]] =  \
-                                    test_x_batch[idx*replica_test_batch_size:(idx+1)*replica_test_batch_size]
-                            feed_dict[n_samples] = ll_samples 
-                        #test_ll_labeled, test_ll_unlabeled, test_acc = sess.run(
-                            #[labeled_log_likelihood, unlabeled_log_likelihood,
-                             #acc],
-                            #feed_dict={x_labeled_ph: test_x_batch,
-                                       #y_labeled_ph: test_y_batch,
-                                       #x_unlabeled_ph: test_x_batch,
-                                       #n_samples: ll_samples})
+                                test_y_batch[idx * replica_test_batch_size:(
+                                                                           idx + 1) * replica_test_batch_size]
+                            feed_dict[feed_x_unlabeled_ph[idx]] = \
+                                test_x_batch[idx * replica_test_batch_size:(
+                                                                           idx + 1) * replica_test_batch_size]
+                            feed_dict[n_samples] = ll_samples
+                            # test_ll_labeled, test_ll_unlabeled, test_acc = sess.run(
+                            # [labeled_log_likelihood, unlabeled_log_likelihood,
+                            # acc],
+                            # feed_dict={x_labeled_ph: test_x_batch,
+                            # y_labeled_ph: test_y_batch,
+                            # x_unlabeled_ph: test_x_batch,
+                            # n_samples: ll_samples})
                         test_ll_labeled, test_ll_unlabeled, test_acc = sess.run(
-                            [labeled_log_likelihood, unlabeled_log_likelihood, acc],
-                            feed_dict=feed_dict) 
+                            [labeled_log_likelihood, unlabeled_log_likelihood,
+                             acc],
+                            feed_dict=feed_dict)
                         test_lls_labeled.append(test_ll_labeled)
                         test_lls_unlabeled.append(test_ll_unlabeled)
                         test_accs.append(test_acc)
                     time_test += time.time()
                     print('>>> TEST ({:.1f}s)'.format(time_test))
-                    print('>> Test log likelihood: labeled = {}, unlabeled = {}'.
-                          format(np.mean(test_lls_labeled),
-                                 np.mean(test_lls_unlabeled)))
+                    print(
+                        '>> Test log likelihood: labeled = {}, unlabeled = {}'.
+                        format(np.mean(test_lls_labeled),
+                               np.mean(test_lls_unlabeled)))
                     print('>> Test accuracy: {:.2f}%'.format(
                         100. * np.mean(test_accs)))
