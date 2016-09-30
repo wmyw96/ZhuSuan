@@ -25,6 +25,7 @@ except:
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     import dataset
+    from deconv import deconv2d
 except:
     raise ImportError()
 
@@ -41,14 +42,18 @@ class M1:
         self.n_x = n_x
         with pt.defaults_scope(activation_fn=tf.nn.relu):
             self.l_x_z = (pt.template('z').
-                          fully_connected(500).
-                          #batch_normalize(scale_after_normalization=True).
-                          fully_connected(500))
-                          #batch_normalize(scale_after_normalization=True))
-            self.l_x_mean = (pt.template('x_hid').
-                             fully_connected(self.n_x, activation_fn=None))
-            self.l_x_logsd = (pt.template('x_hid').
-                              fully_connected(self.n_x, activation_fn=None))
+                          reshape([-1, 1, 1, self.n_z]).
+                          deconv2d(4, 128, edges='VALID').
+                          # batch_normalize(scale_after_normalization=True).
+                          deconv2d(5, 64, stride=2).
+                          # batch_normalize(scale_after_normalization=True).
+                          deconv2d(5, 32, stride=2).
+                          # batch_normalize(scale_after_normalization=True).
+                          deconv2d(5, 3, stride=2, activation_fn=tf.nn.sigmoid))
+
+            self.x_logsd = tf.get_variable("x_logsd",  [1],
+                                           initializer=tf.constant_initializer(
+                                             0.0))
 
     def log_prob(self, latent, observed, given):
         """
@@ -66,14 +71,18 @@ class M1:
         x = observed['x']
 
         n_samples = tf.shape(z)[1]
-        x_hid = self.l_x_z.construct(
-            z=tf.reshape(z, (-1, self.n_z))).tensor
-        x_mean = self.l_x_mean.construct(x_hid=x_hid).reshape(
+        x_mean = self.l_x_z.construct(
+            z=tf.reshape(z, (-1, self.n_z))).reshape(
             (-1, n_samples, self.n_x)).tensor
-        x_logsd = self.l_x_logsd.construct(x_hid=x_hid).reshape(
-            (-1, n_samples, self.n_x)).tensor
+        # x_mean = tf.clip_by_value(x_mean, 0 + 1. / 512., 1 - 1. / 512.)
+        x_logsd = self.x_logsd
         x_scale = tf.exp(x_logsd)
-        x = tf.clip_by_value(tf.expand_dims(x, 1), 0, 1)
+        x = tf.expand_dims(x, 1)
+        # binsize = 1. / 256.
+        # x = (tf.floor(x / binsize) * binsize - x_mean) / x_scale
+        # log_px_z = tf.log(tf.sigmoid(x + binsize/x_scale) -
+        #                   tf.sigmoid(x) + 1e-7)
+        x = tf.clip_by_value(x, 0, 1)
         log_px_z = tf.log(logistic.cdf(x + 1. / 256, x_mean, x_scale) -
                           logistic.cdf(x, x_mean, x_scale) + 1e-8)
         log_px_z = tf.reduce_sum(log_px_z, 2)
@@ -81,7 +90,7 @@ class M1:
         return log_px_z + log_pz
 
 
-def q_net(n_x, n_z, n_samples):
+def q_net(n_x, n_xl, n_z, n_samples):
     """
     Build the recognition network (Q-net) used as variational posterior.
 
@@ -94,11 +103,17 @@ def q_net(n_x, n_z, n_samples):
     """
     with pt.defaults_scope(activation_fn=tf.nn.relu):
         lx = InputLayer((None, n_x))
-        lz_x = PrettyTensor({'x': lx}, pt.template('x').
-                            fully_connected(500).
+        lz_x = PrettyTensor({'x': lx},
+                            pt.template('x').
+                            reshape([-1, n_xl, n_xl, 3]).
+                            conv2d(5, 32, stride=2).
                             # batch_normalize(scale_after_normalization=True).
-                            fully_connected(500))
-                            # batch_normalize(scale_after_normalization=True))
+                            conv2d(5, 64, stride=2).
+                            # batch_normalize(scale_after_normalization=True).
+                            conv2d(5, 128, edges='VALID').
+                            # batch_normalize(scale_after_normalization=True).
+                            flatten()
+                            )
         lz_mean = PrettyTensor({'z': lz_x}, pt.template('z').
                                fully_connected(n_z, activation_fn=None).
                                reshape((-1, 1, n_z)))
@@ -112,9 +127,9 @@ def q_net(n_x, n_z, n_samples):
 if __name__ == "__main__":
     tf.set_random_seed(1237)
 
-    # Load MNIST
-    data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             'data', 'cifar10', 'cifar-10-python.tar.gz')
+    # Load CIFAR
+    data_path = os.path.join('/mfs/yucen/code/mmvae/data',
+                             'cifar-10-python.tar.gz')
     np.random.seed(1234)
     x_train, t_train, x_test, t_test = \
         dataset.load_cifar10(data_path, normalize=True, one_hot=True)
@@ -127,13 +142,12 @@ if __name__ == "__main__":
     n_y = t_train.shape[1]
 
     # Define model parameters
-    n_z = 40
-
+    n_z = 100
     # Define training/evaluation parameters
     lb_samples = 1
-    ll_samples = 1000
+    ll_samples = 100
     epoches = 3000
-    batch_size = 100
+    batch_size = 16
     test_batch_size = 100
     iters = x_train.shape[0] // batch_size
     test_iters = x_test.shape[0] // test_batch_size
@@ -147,7 +161,7 @@ if __name__ == "__main__":
             with tf.variable_scope("model", reuse=reuse) as scope:
                 model = M1(n_z, n_x)
             with tf.variable_scope("variational", reuse=reuse) as scope:
-                lx, lz = q_net(n_x, n_z, n_samples)
+                lx, lz = q_net(n_x, n_xl, n_z, n_samples)
         return model, lx, lz
 
     # Build the training computation graph
@@ -194,6 +208,7 @@ if __name__ == "__main__":
             grad_ranges = []
             for t in range(iters):
                 x_batch = x_train[t * batch_size:(t + 1) * batch_size]
+
                 _, lb, bits, grad_range_ = sess.run([infer, lower_bound,
                                                bits_per_dim, grad_range],
                                  feed_dict={x: x_batch,
