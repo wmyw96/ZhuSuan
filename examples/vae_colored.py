@@ -42,16 +42,11 @@ class M1:
         self.n_x = n_x
         with pt.defaults_scope(activation_fn=tf.nn.relu):
             self.l_x_z = (pt.template('z').
-                          reshape([-1, 1, 1, self.n_z]).
-                          deconv2d(4, 128, edges='VALID').
-                          # batch_normalize(scale_after_normalization=True).
-                          deconv2d(5, 64, stride=2).
-                          # batch_normalize(scale_after_normalization=True).
-                          deconv2d(5, 32, stride=2).
-                          # batch_normalize(scale_after_normalization=True).
-                          deconv2d(5, 3, stride=2, activation_fn=tf.nn.sigmoid))
+                          reshape([-1, 16, 16, 32]).
+                          deconv2d(3, 64).
+                          deconv2d(5, 3, stride=2, activation_fn=None))
 
-            self.x_logsd = tf.get_variable("x_logsd",  [1],
+            self.x_logsd = tf.get_variable("x_logsd",  (),
                                            initializer=tf.constant_initializer(
                                              0.0))
 
@@ -75,8 +70,7 @@ class M1:
             z=tf.reshape(z, (-1, self.n_z))).reshape(
             (-1, n_samples, self.n_x)).tensor
         # x_mean = tf.clip_by_value(x_mean, 0 + 1. / 512., 1 - 1. / 512.)
-        x_logsd = self.x_logsd
-        x_scale = tf.exp(x_logsd)
+        x_scale = tf.exp(self.x_logsd)
         x = tf.expand_dims(x, 1)
         # binsize = 1. / 256.
         # x = (tf.floor(x / binsize) * binsize - x_mean) / x_scale
@@ -106,14 +100,9 @@ def q_net(n_x, n_xl, n_z, n_samples):
         lz_x = PrettyTensor({'x': lx},
                             pt.template('x').
                             reshape([-1, n_xl, n_xl, 3]).
-                            conv2d(5, 32, stride=2).
-                            # batch_normalize(scale_after_normalization=True).
                             conv2d(5, 64, stride=2).
-                            # batch_normalize(scale_after_normalization=True).
-                            conv2d(5, 128, edges='VALID').
-                            # batch_normalize(scale_after_normalization=True).
-                            flatten()
-                            )
+                            conv2d(3, 32).
+                            flatten())
         lz_mean = PrettyTensor({'z': lz_x}, pt.template('z').
                                fully_connected(n_z, activation_fn=None).
                                reshape((-1, 1, n_z)))
@@ -128,8 +117,8 @@ if __name__ == "__main__":
     tf.set_random_seed(1237)
 
     # Load CIFAR
-    data_path = os.path.join('/mfs/yucen/code/mmvae/data',
-                             'cifar-10-python.tar.gz')
+    data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             'data', 'cifar10', 'cifar-10-python.tar.gz')
     np.random.seed(1234)
     x_train, t_train, x_test, t_test = \
         dataset.load_cifar10(data_path, normalize=True, one_hot=True)
@@ -142,7 +131,7 @@ if __name__ == "__main__":
     n_y = t_train.shape[1]
 
     # Define model parameters
-    n_z = 100
+    n_z = 16 * 16 * 32
     # Define training/evaluation parameters
     lb_samples = 1
     ll_samples = 100
