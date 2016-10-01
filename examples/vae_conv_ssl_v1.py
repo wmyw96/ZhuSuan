@@ -63,7 +63,7 @@ class M3(object):
                                       reshape((-1,
                                                pt.UnboundVariable('n_samples'),
                                                3 * 3 * 128)))
-            lz1 = ReparameterizedNormal([lz1_mean, lz1_logvar])
+            lz1 = Normal([lz1_mean, lz1_logvar])
             lz1_4d = PrettyTensor({'z1': lz1}, pt.template('z1').
                                   apply(tf.nn.relu).
                                   reshape((-1, 3, 3, 128)))
@@ -82,7 +82,7 @@ class M3(object):
                                       reshape((-1,
                                               pt.UnboundVariable('n_samples'),
                                                7 * 7 * 64)))
-            lz2 = ReparameterizedNormal([lz2_mean, lz2_logvar])
+            lz2 = Normal([lz2_mean, lz2_logvar])
             lz2_4d = PrettyTensor({'z2': lz2}, pt.template('z2').
                                   apply(tf.nn.relu).
                                   reshape((-1, 7, 7, 64)))
@@ -101,7 +101,7 @@ class M3(object):
                                       reshape((-1,
                                                pt.UnboundVariable('n_samples'),
                                                14 * 14 * 32)))
-            lz3 = ReparameterizedNormal([lz3_mean, lz3_logvar])
+            lz3 = Normal([lz3_mean, lz3_logvar])
             lx = PrettyTensor({'z3': lz3}, pt.template('z3').
                               apply(tf.nn.relu).
                               reshape((-1, 14, 14, 32)).
@@ -210,7 +210,7 @@ def q_net(n_x, n_xl, n_y, n_z, n_samples):
                                   conv2d(5, 32, stride=2,
                                          activation_fn=None).
                                   reshape((-1, 1, 14 * 14 * 32)))
-        lz3 = ReparameterizedNormal([lz3_mean, lz3_logvar], n_samples)
+        lz3 = Normal([lz3_mean, lz3_logvar], n_samples)
         lz3_4d = PrettyTensor({'z3': lz3}, pt.template('z3').
                               apply(tf.nn.relu).
                               reshape((-1, 14, 14, 32)))
@@ -222,7 +222,7 @@ def q_net(n_x, n_xl, n_y, n_z, n_samples):
                                   conv2d(5, 64, stride=2,
                                          activation_fn=None).
                                   reshape((-1, n_samples, 7 * 7 * 64)))
-        lz2 = ReparameterizedNormal([lz2_mean, lz2_logvar])
+        lz2 = Normal([lz2_mean, lz2_logvar])
         lz2_4d = PrettyTensor({'z2': lz2}, pt.template('z2').
                               apply(tf.nn.relu).
                               reshape((-1, 7, 7, 64)))
@@ -234,7 +234,7 @@ def q_net(n_x, n_xl, n_y, n_z, n_samples):
                                   conv2d(5, 128, edges='VALID',
                                          activation_fn=None).
                                   reshape((-1, n_samples, 3 * 3 * 128)))
-        lz1 = ReparameterizedNormal([lz1_mean, lz1_logvar])
+        lz1 = Normal([lz1_mean, lz1_logvar])
         lz1_4d = PrettyTensor({'z1': lz1}, pt.template('z1').
                               apply(tf.nn.relu).
                               reshape((-1, 3, 3, 128)))
@@ -246,7 +246,7 @@ def q_net(n_x, n_xl, n_y, n_z, n_samples):
                                   conv2d(3, 100, edges='VALID',
                                          activation_fn=None).
                                   reshape((-1, n_samples, 100)))
-        lz0 = ReparameterizedNormal([lz0_mean, lz0_logvar])
+        lz0 = Normal([lz0_mean, lz0_logvar])
     lzs = [lz0, lz1, lz2, lz3]
     # lzs = [lz0]
     return lx, lzs
@@ -306,8 +306,9 @@ if __name__ == "__main__":
     labeled_observed = {'x': x_labeled_ph, 'y': y_labeled_ph}
     labeled_latent = dict(('z' + str(i), z_outputs[i])
                           for i in range(len(z_outputs)))
-    labeled_lower_bound = advi(m3_labeled, labeled_observed,
-                               labeled_latent, reduction_indices=1)
+    labeled_lower_bound = tf.reduce_mean(
+        advi(m3_labeled, labeled_observed, labeled_latent,
+             reduction_indices=1))
 
     # Unlabeled
     inputs = {lx: x_unlabeled_ph}
@@ -315,8 +316,9 @@ if __name__ == "__main__":
     unlabeled_latent = dict(('z' + str(i), z_outputs[i])
                             for i in range(len(z_outputs)))
     unlabeled_observed = {'x': x_unlabeled_ph}
-    unlabeled_lower_bound = advi(m3_unlabeled, unlabeled_observed,
-                                 unlabeled_latent, reduction_indices=1)
+    unlabeled_lower_bound = tf.reduce_mean(
+        advi(m3_unlabeled, unlabeled_observed, unlabeled_latent,
+             reduction_indices=1))
 
     # Build classifier
     with tf.variable_scope("variational", reuse=True) as scope:

@@ -27,6 +27,8 @@ try:
     from deconv import deconv2d
 except:
     raise ImportError()
+
+
 tf.app.flags.DEFINE_integer('num_gpus', 2, "How many GPUs to use")
 tf.app.flags.DEFINE_string('master_device', "/gpu:0", 
                            "Using which gpu to merge gradients")
@@ -249,7 +251,8 @@ def q_net(n_x, n_y, n_z, n_samples):
         lz_logvar = PrettyTensor({'z_logvar': lz_logvar_2d},
                                  pt.template('z_logvar').
                                  reshape((-1, 1, n_z)))
-        lz = ReparameterizedNormal([lz_mean, lz_logvar], n_samples=n_samples)
+        lz = Normal([lz_mean, lz_logvar], n_samples=n_samples,
+                    reparameterized=False)
 
         # Unlabeled
         lx_u = InputLayer((None, n_x))
@@ -272,10 +275,9 @@ def q_net(n_x, n_y, n_z, n_samples):
         lz_logvar_u = PrettyTensor({'z_logvar': lz_logvar_2d_u},
                                    pt.template('z_logvar').
                                    reshape((-1, n_samples, n_z)))
-        lz_u = ReparameterizedNormal([lz_mean_u, lz_logvar_u])
+        lz_u = Normal([lz_mean_u, lz_logvar_u], reparameterized=False)
 
-    return lx, ly, lz, lz_mean, lz_logvar, lx_u, ly_u, lz_u, \
-        lz_mean_u, lz_logvar_u, qy_x
+        return lx, ly, lz, lx_u, ly_u, lz_u, qy_x
 
 
 if __name__ == "__main__":
@@ -320,7 +322,7 @@ if __name__ == "__main__":
         tower_acc = []
         tower_grads = []
 
-        for i in xrange(FLAGS.num_gpus):
+        for i in range(FLAGS.num_gpus):
             with tf.device('/gpu:%d' % i):
                 reuse = None
                 if i > 0 : reuse = True
@@ -329,9 +331,8 @@ if __name__ == "__main__":
                 with tf.variable_scope("model", reuse=True) as scope:
                     m2_unlabeled = M2Unlabeled(n_x, n_y, n_z)
                 with tf.variable_scope("q_net", reuse=reuse) as scope:
-                    lx, ly, lz, lz_mean, lz_logvar, lx_u, ly_u, lz_u, \
-                        lz_mean_u, lz_logvar_u, qy_x = q_net(n_x, n_y,
-                                                             n_z, n_samples)
+                    lx, ly, lz, lx_u, ly_u, lz_u, qy_x = q_net(n_x, n_y, n_z,
+                                                               n_samples)
 
                 # Labeled
                 x_labeled_ph = tf.placeholder(tf.float32, shape=(None, n_x))
@@ -339,11 +340,8 @@ if __name__ == "__main__":
                 feed_x_labeled_ph.append(x_labeled_ph)
                 feed_y_labeled_ph.append(y_labeled_ph)
                 inputs = {lx: x_labeled_ph, ly: y_labeled_ph}
-                z_outputs = get_output([lz, lz_mean, lz_logvar], inputs)
-                z, z_mean, z_logvar = [k for k, v in z_outputs]
-                z = tf.stop_gradient(z)
-                z_logpdf = lz.get_logpdf_for(z, [z_mean, z_logvar])
-                labeled_latent = {'z': [z, z_logpdf]}
+                z_outputs = get_output(lz, inputs)
+                labeled_latent = {'z': z_outputs}
                 labeled_observed = {'x': x_labeled_ph, 'y': y_labeled_ph}
                 labeled_cost, labeled_log_likelihood = rws(
                     m2_labeled, labeled_observed, labeled_latent,
@@ -356,13 +354,9 @@ if __name__ == "__main__":
                 x_unlabeled_ph = tf.placeholder(tf.float32, shape=(None, n_x))
                 feed_x_unlabeled_ph.append(x_unlabeled_ph)
                 inputs = {lx_u: x_unlabeled_ph}
-                outputs = get_output([ly_u, lz_u, lz_mean_u, lz_logvar_u],
-                                     inputs)
-                y_u_outputs = outputs[0]
-                z_u, z_mean_u, z_logvar_u = [k for k, v in outputs[1:]]
-                z_u = tf.stop_gradient(z_u)
-                z_u_logpdf = lz_u.get_logpdf_for(z_u, [z_mean_u, z_logvar_u])
-                unlabeled_latent = {'z': [z_u, z_u_logpdf], 'y': y_u_outputs}
+                outputs = get_output([ly_u, lz_u], inputs)
+                y_u_outputs, z_u_outputs = outputs
+                unlabeled_latent = {'z': z_u_outputs, 'y': y_u_outputs}
                 unlabeled_observed = {'x': x_unlabeled_ph}
                 unlabeled_cost, unlabeled_log_likelihood = rws(
                     m2_unlabeled, unlabeled_observed, unlabeled_latent,
