@@ -69,13 +69,8 @@ class M1:
         x_mean = self.l_x_z.construct(
             z=tf.reshape(z, (-1, self.n_z))).reshape(
             (-1, n_samples, self.n_x)).tensor
-        # x_mean = tf.clip_by_value(x_mean, 0 + 1. / 512., 1 - 1. / 512.)
         x_scale = tf.exp(self.x_logsd)
         x = tf.expand_dims(x, 1)
-        # binsize = 1. / 256.
-        # x = (tf.floor(x / binsize) * binsize - x_mean) / x_scale
-        # log_px_z = tf.log(tf.sigmoid(x + binsize/x_scale) -
-        #                   tf.sigmoid(x) + 1e-7)
         x = tf.clip_by_value(x, 0, 1)
         log_px_z = tf.log(logistic.cdf(x + 1. / 256, x_mean, x_scale) -
                           logistic.cdf(x, x_mean, x_scale) + 1e-8)
@@ -100,14 +95,12 @@ def q_net(n_x, n_xl, n_z, n_samples):
         lz_x = PrettyTensor({'x': lx},
                             pt.template('x').
                             reshape([-1, n_xl, n_xl, 3]).
-                            conv2d(5, 64, stride=2).
-                            conv2d(3, 32).
-                            flatten())
+                            conv2d(5, 64, stride=2))
         lz_mean = PrettyTensor({'z': lz_x}, pt.template('z').
-                               fully_connected(n_z, activation_fn=None).
+                               conv2d(3, 32, activation_fn=None).
                                reshape((-1, 1, n_z)))
         lz_logvar = PrettyTensor({'z': lz_x}, pt.template('z').
-                                 fully_connected(n_z, activation_fn=None).
+                                 conv2d(3, 32, activation_fn=None).
                                  reshape((-1, 1, n_z)))
         lz = Normal([lz_mean, lz_logvar], n_samples)
     return lx, lz
@@ -162,7 +155,7 @@ if __name__ == "__main__":
     z_outputs = get_output(lz, x)
     lower_bound = tf.reduce_mean(advi(
         model, {'x': x}, {'z': z_outputs}, reduction_indices=1))
-    bits_per_dim = lower_bound / n_x * 1. / np.log(2.)
+    bits_per_dim = -lower_bound / n_x * 1. / np.log(2.)
     grads = optimizer.compute_gradients(-bits_per_dim)
     grad_range = reduce(tf.maximum, list(
         tf.reduce_max(tf.abs(k)) for k, v in grads if k is not None))
@@ -173,7 +166,7 @@ if __name__ == "__main__":
     z_outputs = get_output(eval_lz, x)
     eval_lower_bound = tf.reduce_mean(advi(
         eval_model, {'x': x}, {'z': z_outputs}, reduction_indices=1))
-    eval_bits_per_dim = eval_lower_bound / n_x * 1. / np.log(2.)
+    eval_bits_per_dim = -eval_lower_bound / n_x * 1. / np.log(2.)
     eval_log_likelihood = tf.reduce_mean(is_loglikelihood(
         eval_model, {'x': x}, {'z': z_outputs}, reduction_indices=1))
     eval_bits_per_dim_ll = eval_log_likelihood / n_x * 1. / np.log(2.)
