@@ -166,7 +166,7 @@ if __name__ == "__main__":
     z_outputs = get_output(eval_lz, x)
     eval_lower_bound = tf.reduce_mean(advi(
         eval_model, {'x': x}, {'z': z_outputs}, reduction_indices=1))
-    eval_bits_per_dim = eval_lower_bound / n_x * 1. / np.log(2.)
+    eval_bits_per_dim = -eval_lower_bound / n_x * 1. / np.log(2.)
     eval_log_likelihood = tf.reduce_mean(is_loglikelihood(
         eval_model, {'x': x}, {'z': z_outputs}, reduction_indices=1))
     eval_bits_per_dim_ll = eval_log_likelihood / n_x * 1. / np.log(2.)
