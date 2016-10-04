@@ -98,12 +98,11 @@ class M1:
         return log_px_z1 + log_pz1_z2 + log_pz2
 
 
-def q_net(n_x, n_xl, n_z, n_samples):
+def q_net(n_x, n_xl, n_samples):
     """
     Build the recognition network (Q-net) used as variational posterior.
 
     :param n_x: Int. The dimension of observed variables (x).
-    :param n_z: Int. The dimension of latent variables (z).
     :param n_samples: A Int or a Tensor of type int. Number of samples of
         latent variables.
 
@@ -175,7 +174,7 @@ if __name__ == "__main__":
             with tf.variable_scope("model", reuse=reuse) as scope:
                 model = M1(n_x)
             with tf.variable_scope("variational", reuse=reuse) as scope:
-                lx, lz1, lz2 = q_net(n_x, n_xl, n_z, n_samples)
+                lx, lz1, lz2 = q_net(n_x, n_xl, n_samples)
         return model, lx, lz1, lz2
 
     # Build the training computation graph
