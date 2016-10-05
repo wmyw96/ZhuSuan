@@ -10,7 +10,7 @@ import time
 
 import tensorflow as tf
 import prettytensor as pt
-from six.moves import range, reduce
+from six.moves import range, reduce, zip
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -181,14 +181,16 @@ if __name__ == "__main__":
     learning_rate_ph = tf.placeholder(tf.float32, shape=[])
     x = tf.placeholder(tf.float32, shape=(None, n_x))
     n_samples = tf.placeholder(tf.int32, shape=())
-    optimizer = tf.train.AdamOptimizer(learning_rate_ph, epsilon=1e-4)
+    optimizer = tf.train.AdamOptimizer(learning_rate_ph)
     model, lx, lz1, lz2 = build_model(pt.Phase.train)
     z1_outputs, z2_outputs = get_output([lz1, lz2], x)
     latent = {'z1': z1_outputs, 'z2': z2_outputs}
     lower_bound = tf.reduce_mean(advi(
         model, {'x': x}, latent, reduction_indices=1))
     bits_per_dim = -lower_bound / n_x * 1. / np.log(2.)
-    grads = optimizer.compute_gradients(bits_per_dim)
+    params = tf.trainable_variables()
+    grads, _ = tf.clip_by_global_norm(tf.gradients(bits_per_dim, params), 5)
+    grads = list(zip(grads, params))
     def l2_norm(x):
         return tf.sqrt(tf.reduce_sum(tf.square(x)))
     update_ratio = learning_rate_ph * tf.reduce_mean(tf.pack(list(
