@@ -187,8 +187,8 @@ def load_cifar10(path, normalize=True, dequantify=False, one_hot=True):
                                      size=train_x.shape).astype('float32')
         test_x += np.random.uniform(0, 1, size=test_x.shape).astype('float32')
     if normalize:
-        train_x /= 256.
-        test_x /= 256.
+        train_x = train_x / 256. - 0.5
+        test_x = test_x / 256. - 0.5
 
     train_x = train_x.reshape((50000, 3, 32, 32)).transpose(0, 2, 3, 1)
     test_x = test_x.reshape((10000, 3, 32, 32)).transpose(0, 2, 3, 1)

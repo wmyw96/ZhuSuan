@@ -39,7 +39,7 @@ class deconv2d(prettytensor.VarStoreMethod):
                  bias_init=tf.zeros_initializer,
                  edges=PAD_SAME,
                  batch_normalize=False,
-                 name=PROVIDED, ):
+                 name=PROVIDED):
         """Adds a deconvolution to the stack of operations.
 
         The current head must be a rank 4 Tensor.
