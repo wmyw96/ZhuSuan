@@ -9,6 +9,7 @@ import prettytensor as pt
 import dataset
 from collections import namedtuple
 from deconv import deconv2d
+from adamax import AdamaxOptimizer
 import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
@@ -196,8 +197,8 @@ class M1(object):
                 logqs = posterior.logps(z)   # (bs,k,map,map,c)
                 logps = prior.logps(z, expand_dim=False)
                 kl_cost_dic[name] = logqs - logps  # (batch_size,k,map,map,c)
-                z = tf.reshape(z, [-1, group.map_size, group.map_size,
-                                   self.n_z])
+                z = tf.reshape(z, [-1, group.map_size,
+                                   group.map_size, self.n_z])
                 h = tf.concat(3, [h, z])
                 if group_i > 0 and block_i == 0:
                     input_h = resize_nearest_neighbor(input_h, 2)
@@ -241,12 +242,15 @@ class M1(object):
 
         return lower_bound, lower_bound_obj
 
-    def is_loglikelihood(self, batch_size, n_samples):
+    def lb_is_loglikelihood(self, batch_size, n_samples):
         log_px_z1, kl_cost_dic = self.forward(batch_size, n_samples)
-        kl_cost = tf.add_n([tf.reduce_sum(kl_cost_dic[i], [2, 3, 4]) for i
-                            in kl_cost_dic])
-        log_w = log_px_z1 - kl_cost
-        return log_mean_exp(log_w, 1)
+        total_kl_cost = 0
+        for z in kl_cost_dic:
+            total_kl_cost += tf.reduce_sum(kl_cost_dic[z], [2, 3, 4])
+        lower_bound = tf.reduce_mean(log_px_z1 - total_kl_cost,
+                                     reduction_indices=1)
+        log_w = log_px_z1 - total_kl_cost
+        return lower_bound, log_mean_exp(log_w, 1)
 
     def train(self, config):
         tf.set_random_seed(1234)
@@ -258,20 +262,28 @@ class M1(object):
         x_train = x_train.reshape((-1, self.n_x))
         x_test = x_test.reshape((-1, self.n_x))
         learning_rate_ph = tf.placeholder(tf.float32, shape=[])
-        optimizer = tf.train.AdamOptimizer(learning_rate_ph)
-        lower_bound, lower_bound_obj = self.advi_klmin(self.batch_size,
-                                                       self.lb_samples)
+        # optimizer = tf.train.AdamOptimizer(learning_rate_ph)
+        optimizer = AdamaxOptimizer(learning_rate_ph)
+        with pt.defaults_scope(phase=pt.Phase.train):
+            lower_bound, lower_bound_obj = self.advi_klmin(self.batch_size,
+                                                           self.lb_samples)
         lower_bound = tf.reduce_mean(lower_bound)
         lower_bound_obj = tf.reduce_mean(lower_bound_obj)
         bits_per_dim = -lower_bound / self.n_x * 1. / np.log(2.)
-        eval_log_likelihood = tf.reduce_mean(self.is_loglikelihood(
-            self.test_batch_size, self.ll_samples))
-        eval_bits_per_dim_ll = -eval_log_likelihood / self.n_x * 1. / np.log(2.)
         tf.scalar_summary("train_sum/bits_per_dim", bits_per_dim)
         tf.scalar_summary("train_sum/dec_log_stdv", self.x_logsd)
         grads_and_vars = optimizer.compute_gradients(-lower_bound_obj)
         merged = tf.merge_all_summaries()
         infer = optimizer.apply_gradients(grads_and_vars)
+
+        with pt.defaults_scope(phase=pt.Phase.test):
+            eval_lower_bound, eval_log_likelihood = self.lb_is_loglikelihood(
+                self.test_batch_size, self.ll_samples)
+        eval_lower_bound = tf.reduce_mean(eval_lower_bound)
+        eval_bits_per_dim = -eval_lower_bound / self.n_x * 1. / np.log(2.)
+        eval_log_likelihood = tf.reduce_mean(eval_log_likelihood)
+        eval_bits_per_dim_ll = -eval_log_likelihood / self.n_x * 1. / np.log(2.)
+
         total_size = 0
         params = tf.trainable_variables()
         for i in params:
@@ -335,11 +347,9 @@ class M1(object):
                         test_x_batch = x_test[
                                        t * self.test_batch_size:
                                        (t + 1) * self.test_batch_size]
-                        test_lb, test_lb_bits = sess.run(
-                            [lower_bound, bits_per_dim],
-                            feed_dict={self.x: test_x_batch})
-                        test_ll, test_ll_bits = sess.run(
-                            [eval_log_likelihood, eval_bits_per_dim_ll],
+                        test_lb, test_lb_bits, test_ll, test_ll_bits = sess.run(
+                            [eval_lower_bound, eval_bits_per_dim,
+                             eval_log_likelihood, eval_bits_per_dim_ll],
                             feed_dict={self.x: test_x_batch})
                         test_lbs.append(test_lb)
                         test_lb_bitss.append(test_lb_bits)
@@ -362,7 +372,7 @@ if __name__ == "__main__":
                            os.environ['MODEL_RESULT_PATH_AND_PREFIX'],
                            'path and prefix to save params')
     tf.flags.DEFINE_integer("save_freq", 10, 'save frequency of param file')
-    tf.flags.DEFINE_integer("test_freq", 10, 'test frequency of param file')
+    tf.flags.DEFINE_integer("test_freq", 5, 'test frequency of param file')
     tf.flags.DEFINE_string("model_file", "",
                            "restoring model file")
     FLAGS = tf.flags.FLAGS
@@ -374,7 +384,7 @@ if __name__ == "__main__":
         bottle_neck_group(2, 64, 8),
         bottle_neck_group(2, 64, 4)
     ]
-    model = M1(batch_size=16, test_batch_size=16, n_z=32, groups=groups,
+    model = M1(batch_size=16, test_batch_size=100, n_z=32, groups=groups,
                kl_min=0.1, ll_samples=10, lb_samples=1, image_size=32)
     model.train(FLAGS)
 
