@@ -202,9 +202,11 @@ class M1(object):
                 h = tf.concat(3, [h, z])
                 if group_i > 0 and block_i == 0:
                     input_h = resize_nearest_neighbor(input_h, 2)
+                h = tf.nn.elu(h)
                 h = self.down_convs[name+'_down_conv2'].construct(
                     h2_plus_z=h).tensor
                 h = input_h + 0.1 * h
+        h = tf.nn.elu(h)
         x_mean = self.l_x_z.construct(h=h).reshape([-1, n_samples, self.n_x]
                                                    ).tensor
         x_mean = tf.clip_by_value(x_mean * 0.1, -0.5 + 1 / 512., 0.5 - 1 / 512.)
@@ -262,8 +264,8 @@ class M1(object):
         x_train = x_train.reshape((-1, self.n_x))
         x_test = x_test.reshape((-1, self.n_x))
         learning_rate_ph = tf.placeholder(tf.float32, shape=[])
-        # optimizer = tf.train.AdamOptimizer(learning_rate_ph)
-        optimizer = AdamaxOptimizer(learning_rate_ph)
+        optimizer = tf.train.AdamOptimizer(learning_rate_ph)
+        # optimizer = AdamaxOptimizer(learning_rate_ph)
         with pt.defaults_scope(phase=pt.Phase.train):
             lower_bound, lower_bound_obj = self.advi_klmin(self.batch_size,
                                                            self.lb_samples)
@@ -363,7 +365,7 @@ class M1(object):
                         np.mean(test_lls), np.mean(test_ll_bitss)))
 
 if __name__ == "__main__":
-    tf.flags.DEFINE_integer("epochs", 1000, "max epoch num")
+    tf.flags.DEFINE_integer("epochs", 5000, "max epoch num")
     tf.flags.DEFINE_integer("learning_rate", 1e-3, "")
     tf.flags.DEFINE_integer("anneal_lr_freq", 200,
                             "learning rate decay every epochs")

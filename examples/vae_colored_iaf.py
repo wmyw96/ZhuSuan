@@ -136,6 +136,13 @@ def resize_nearest_neighbor(x, scale):
     return x
 
 
+def discretized_logistic(mean, logscale, binsize=1 / 256.0, sample=None):
+    scale = tf.exp(logscale)
+    sample = (tf.floor(sample / binsize) * binsize - mean) / scale
+    logp = tf.log(tf.sigmoid(sample + binsize / scale) - tf.sigmoid(sample) + 1e-7)
+    return tf.reduce_sum(logp, 2)
+
+
 def advi_klmin(model, observed, latent, reduction_indices=1, given=None,
              kl_min=0.1):
     """
@@ -162,8 +169,8 @@ def advi_klmin(model, observed, latent, reduction_indices=1, given=None,
     """
     latent_k, latent_v = map(list, zip(*six.iteritems(latent)))
     latent_outputs = dict(zip(latent_k, map(lambda x: x[0], latent_v)))
-    for i in latent_outputs:
-        variable_summaries(latent_outputs[i], i)
+    # for i in latent_outputs:
+    #     variable_summaries(latent_outputs[i], i)
     given = given if given is not None else {}
     log_px_z1, log_pzs = model.log_prob(latent_outputs, observed, given)
     log_qzs = dict(zip(latent_k, map(lambda x: x[1], latent_v)))
@@ -272,8 +279,6 @@ class M1:
                                    self.groups[0].map_size,
                                    self.groups[0].num_filters]).
                           apply(tf.nn.elu).
-                          # deconv2d(5, group.num_filters, stride=2,
-                          #          activation_fn=tf.nn.elu).
                           deconv2d(5, 3, stride=2, activation_fn=None))
         self.x_logsd = tf.get_variable('x_logsd',  (),
                                        initializer=tf.zeros_initializer)
@@ -332,10 +337,11 @@ class M1:
         x_mean = tf.clip_by_value(x_mean * 0.1, -0.5 + 1 / 512., 0.5 - 1 / 512.)
 
         x = tf.expand_dims(x, 1)
-        x_scale = tf.exp(self.x_logsd)
-        log_px_z1 = tf.log(logistic.cdf(x + 1. / 256, x_mean, x_scale) -
-                           logistic.cdf(x, x_mean, x_scale) + 1e-8)
-        log_px_z1 = tf.reduce_sum(log_px_z1, 2)
+        # x_scale = tf.exp(self.x_logsd)
+        # log_px_z1 = tf.log(logistic.cdf(x + 1. / 256, x_mean, x_scale) -
+        #                    logistic.cdf(x, x_mean, x_scale) + 1e-8)
+        # log_px_z1 = tf.reduce_sum(log_px_z1, 2)
+        log_px_z1 = discretized_logistic(x_mean, self.x_logsd, sample=x)
 
         return log_px_z1, log_pzs
 
@@ -406,7 +412,7 @@ def q_net(n_x, n_xl, n_samples, n_z, groups):
 
 
 if __name__ == "__main__":
-    tf.set_random_seed(1237)
+    tf.set_random_seed(1234)
 
     # Load CIFAR
     data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -430,7 +436,7 @@ if __name__ == "__main__":
     test_batch_size = 100
     iters = x_train.shape[0] // batch_size
     test_iters = x_test.shape[0] // test_batch_size
-    test_freq = 10
+    test_freq = 5
     learning_rate = 0.001
     anneal_lr_freq = 200
     anneal_lr_rate = 0.75
@@ -441,9 +447,9 @@ if __name__ == "__main__":
         'bottle_neck_group',
         ['num_blocks', 'num_filters', 'map_size'])
     groups = [
-        bottle_neck_group(2, 160, 16),
-        bottle_neck_group(2, 160, 8),
-        bottle_neck_group(2, 160, 4)
+        bottle_neck_group(2, 64, 16),
+        bottle_neck_group(2, 64, 8),
+        bottle_neck_group(2, 64, 4)
     ]
 
     # settings

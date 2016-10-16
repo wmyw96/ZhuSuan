@@ -90,7 +90,7 @@ class M1:
             [-1, n_samples, self.n_x]).tensor
         x_scale = tf.exp(self.x_logsd)
         x = tf.expand_dims(x, 1)
-        x = tf.clip_by_value(x, 0, 1)
+        x = tf.clip_by_value(x, -0.5, 0.5)
         log_px_z1 = tf.log(logistic.cdf(x + 1. / 256, x_mean, x_scale) -
                            logistic.cdf(x, x_mean, x_scale) + 1e-8)
         log_px_z1 = tf.reduce_sum(log_px_z1, 2)
@@ -157,7 +157,7 @@ if __name__ == "__main__":
     n_y = t_train.shape[1]
 
     # Define training/evaluation parameters
-    lb_samples = 10
+    lb_samples = 1
     ll_samples = 100
     epoches = 3000
     batch_size = 16
@@ -188,14 +188,18 @@ if __name__ == "__main__":
     lower_bound = tf.reduce_mean(advi(
         model, {'x': x}, latent, reduction_indices=1))
     bits_per_dim = -lower_bound / n_x * 1. / np.log(2.)
-    params = tf.trainable_variables()
-    grads, _ = tf.clip_by_global_norm(tf.gradients(bits_per_dim, params), 5)
-    grads = list(zip(grads, params))
+    # params = tf.trainable_variables()
+    # grads, _ = tf.clip_by_global_norm(tf.gradients(bits_per_dim, params), 5)
+    # grads = list(zip(grads, params))
+    grads = optimizer.compute_gradients(bits_per_dim)
+
     def l2_norm(x):
         return tf.sqrt(tf.reduce_sum(tf.square(x)))
+
     update_ratio = learning_rate_ph * tf.reduce_mean(tf.pack(list(
         (l2_norm(k) / (l2_norm(v) + 1e-8)) for k, v in grads
         if k is not None)))
+
     infer = optimizer.apply_gradients(grads)
 
     # Build the evaluation computation graph
