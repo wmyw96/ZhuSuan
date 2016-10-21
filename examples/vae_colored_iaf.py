@@ -270,7 +270,7 @@ class M1:
                         pt.template('h2_plus_z').
                         reshape([-1, group.map_size, group.map_size,
                                  group.num_filters + self.n_z]).
-                        apply(tf.nn.elu).
+                        # apply(tf.nn.elu).
                         deconv2d(3, group.num_filters, stride=stride,
                                  name=name+'_down_conv2',
                                  activation_fn=None))
@@ -278,7 +278,7 @@ class M1:
                           reshape([-1, self.groups[0].map_size,
                                    self.groups[0].map_size,
                                    self.groups[0].num_filters]).
-                          apply(tf.nn.elu).
+                          # apply(tf.nn.elu).
                           deconv2d(5, 3, stride=2, activation_fn=None))
         self.x_logsd = tf.get_variable('x_logsd',  (),
                                        initializer=tf.zeros_initializer)
@@ -474,8 +474,8 @@ if __name__ == "__main__":
     learning_rate_ph = tf.placeholder(tf.float32, shape=[])
     x = tf.placeholder(tf.float32, shape=(None, n_x))
     n_samples = tf.placeholder(tf.int32, shape=())
-    optimizer = tf.train.AdamOptimizer(learning_rate_ph)
-    # optimizer = AdamaxOptimizer(learning_rate_ph)
+    # optimizer = tf.train.AdamOptimizer(learning_rate_ph)
+    optimizer = AdamaxOptimizer(learning_rate_ph)
     model, lx, lzs = build_model(pt.Phase.train)
     lz_key, lz_list = map(list, zip(*six.iteritems(lzs)))
     z_outputs = get_output(lz_list, x)

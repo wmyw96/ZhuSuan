@@ -12,6 +12,8 @@ import tensorflow as tf
 import prettytensor as pt
 from six.moves import range, reduce, zip
 import numpy as np
+from skimage import io, img_as_ubyte
+from skimage.exposure import rescale_intensity
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
@@ -26,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     import dataset
     from deconv import deconv2d
+    from adamax import AdamaxOptimizer
 except:
     raise ImportError()
 
@@ -90,12 +93,24 @@ class M1:
             [-1, n_samples, self.n_x]).tensor
         x_scale = tf.exp(self.x_logsd)
         x = tf.expand_dims(x, 1)
-        x = tf.clip_by_value(x, -0.5, 0.5)
+        # x = tf.clip_by_value(x, -0.5, 0.5)
         log_px_z1 = tf.log(logistic.cdf(x + 1. / 256, x_mean, x_scale) -
                            logistic.cdf(x, x_mean, x_scale) + 1e-8)
         log_px_z1 = tf.reduce_sum(log_px_z1, 2)
 
         return log_px_z1 + log_pz1_z2 + log_pz2
+
+    def generate_samples(self, batch_size):
+        z2 = tf.random_normal((batch_size, 16, 16, 64), mean=0, stddev=1)
+        z1_hid = self.l_z1_z2.construct(z2=z2).tensor
+        z1_mean = self.l_z1_mean.construct(z1_hid=z1_hid).tensor
+        z1_logvar = self.l_z1_logvar.construct(z1_hid=z1_hid).tensor
+        z1 = norm.rvs(loc=z1_mean, scale=tf.exp(0.5 * z1_logvar),
+                      shape=tf.shape(z1_mean))
+        x_mean = self.l_x_z1.construct(z1=z1).tensor
+        x_scale = tf.exp(self.x_logsd)
+        x = norm.rvs(loc=x_mean, scale=x_scale, shape=tf.shape(x_mean))
+        return x
 
 
 def q_net(n_x, n_xl, n_samples):
@@ -139,6 +154,41 @@ def q_net(n_x, n_xl, n_samples):
     return lx, lz1, lz2
 
 
+def save_image_collections(x, filename, shape=(10, 10), scaleeach=False, transpose=False):
+    """
+    :param shape: tuple
+        The shape of final big images.
+    :param x: uint8 numpy array
+        Input image collections.(number_of_images, rows, columns, channels)or(number_of_images, channels, rows, columns)
+    :param scaleeach: bool
+        If true, rescale intensity for each image.
+    :param transpose: bool
+        If true, transpose x to (number_of_images, rows, columns, channels), i.e., put channels behind.
+    :return: uint8 numpy array
+        The output image.
+    """
+    n = x.shape[0]
+
+    if transpose:
+        x = x.transpose(0, 2, 3, 1)
+    if scaleeach is True:
+        for i in xrange(n):
+            x[i] = rescale_intensity(x[i], out_range=(0, 1))
+    n_channels = x.shape[3]
+    x = img_as_ubyte(x)
+    r, c = shape
+    if r*c < n:
+        print('Shape too small to contain all images')
+    h, w = x.shape[1], x.shape[2]
+    ret = np.zeros((h*r, w*c, n_channels), dtype='uint8')
+    for i in xrange(r):
+        for j in xrange(c):
+            if i*c+j < n:
+                ret[i*h:(i+1)*h, j*w:(j+1)*w, :] = x[i*c+j]
+    ret = ret.squeeze()
+    io.imsave(filename, ret)
+
+
 if __name__ == "__main__":
     tf.set_random_seed(1237)
 
@@ -148,6 +198,8 @@ if __name__ == "__main__":
     np.random.seed(1234)
     x_train, t_train, x_test, t_test = \
         dataset.load_cifar10(data_path, normalize=True, one_hot=True)
+    x_train += 0.5
+    x_test += 0.5
     print(x_train.max(), x_train.min())
     print(x_test.max(), x_test.min())
     _, n_xl, _, n_channels = x_train.shape
@@ -164,7 +216,7 @@ if __name__ == "__main__":
     test_batch_size = 100
     iters = x_train.shape[0] // batch_size
     test_iters = x_test.shape[0] // test_batch_size
-    test_freq = 10
+    test_freq = 1
     learning_rate = 0.001
     anneal_lr_freq = 200
     anneal_lr_rate = 0.75
@@ -181,7 +233,8 @@ if __name__ == "__main__":
     learning_rate_ph = tf.placeholder(tf.float32, shape=[])
     x = tf.placeholder(tf.float32, shape=(None, n_x))
     n_samples = tf.placeholder(tf.int32, shape=())
-    optimizer = tf.train.AdamOptimizer(learning_rate_ph)
+    # optimizer = tf.train.AdamOptimizer(learning_rate_ph)
+    optimizer = AdamaxOptimizer(learning_rate_ph)
     model, lx, lz1, lz2 = build_model(pt.Phase.train)
     z1_outputs, z2_outputs = get_output([lz1, lz2], x)
     latent = {'z1': z1_outputs, 'z2': z2_outputs}
@@ -213,6 +266,7 @@ if __name__ == "__main__":
     eval_log_likelihood = tf.reduce_mean(is_loglikelihood(
         eval_model, {'x': x}, latent, reduction_indices=1))
     eval_bits_per_dim_ll = -eval_log_likelihood / n_x * 1. / np.log(2.)
+    samples = eval_model.generate_samples(test_batch_size)
 
     params = tf.trainable_variables()
     for i in params:
@@ -267,6 +321,13 @@ if __name__ == "__main__":
                     test_lb_bitss.append(test_lb_bits)
                     test_lls.append(test_ll)
                     test_ll_bitss.append(test_ll_bits)
+                imgs = sess.run(samples)
+                save_image_collections(imgs, scaleeach=True,
+                                       filename=os.path.join(
+                                           os.environ[
+                                               'MODEL_RESULT_PATH_AND_PREFIX'],
+                                           'samples_{:03d}.png'.format(
+                                               epoch)))
                 time_test += time.time()
                 print('>>> TEST ({:.1f}s)'.format(time_test))
                 print('>> Test lower bound = {}, bits = {}'.format(

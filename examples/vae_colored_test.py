@@ -10,12 +10,49 @@ import dataset
 from collections import namedtuple
 from deconv import deconv2d
 from adamax import AdamaxOptimizer
+from skimage import io, img_as_ubyte
+from skimage.exposure import rescale_intensity
 import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from zhusuan.utils import log_mean_exp
 except:
     raise ImportError()
+
+
+def save_image_collections(x, filename, shape=(10, 10), scaleeach=False, transpose=False):
+    """
+    :param shape: tuple
+        The shape of final big images.
+    :param x: uint8 numpy array
+        Input image collections.(number_of_images, rows, columns, channels)or(number_of_images, channels, rows, columns)
+    :param scaleeach: bool
+        If true, rescale intensity for each image.
+    :param transpose: bool
+        If true, transpose x to (number_of_images, rows, columns, channels), i.e., put channels behind.
+    :return: uint8 numpy array
+        The output image.
+    """
+    n = x.shape[0]
+
+    if transpose:
+        x = x.transpose(0, 2, 3, 1)
+    if scaleeach is True:
+        for i in xrange(n):
+            x[i] = rescale_intensity(x[i], out_range=(0, 1))
+    n_channels = x.shape[3]
+    x = img_as_ubyte(x)
+    r, c = shape
+    if r*c < n:
+        print 'Shape too small to contain all images'
+    h, w = x.shape[1], x.shape[2]
+    ret = np.zeros((h*r, w*c, n_channels), dtype='uint8')
+    for i in xrange(r):
+        for j in xrange(c):
+            if i*c+j < n:
+                ret[i*h:(i+1)*h, j*w:(j+1)*w, :] = x[i*c+j]
+    ret = ret.squeeze()
+    io.imsave(filename, ret)
 
 
 def split(x, split_dim, split_sizes):
@@ -64,14 +101,21 @@ def gaussian_diag_logps(mean, logvar, sample=None, expand_dims=True):
 
 
 class DiagonalGaussian(object):
+    """
+    :expand_dim : if True, insert n_samples dim next to batch_size to mean & var
+    """
 
     def __init__(self, mean, logvar):
         self.mean = mean
         self.logvar = logvar
 
-    def samples(self, k=1):
-        mean = tf.expand_dims(self.mean, 1)
-        logvar = tf.expand_dims(self.logvar, 1)
+    def samples(self, k=1, expand_dim=True):
+        if expand_dim is True:
+            mean = tf.expand_dims(self.mean, 1)
+            logvar = tf.expand_dims(self.logvar, 1)
+        else:
+            mean = self.mean
+            logvar = self.logvar
         if k == 1:
             noise = tf.random_normal(tf.shape(mean))
             return mean + tf.exp(0.5 * logvar) * noise
@@ -202,11 +246,11 @@ class M1(object):
                 h = tf.concat(3, [h, z])
                 if group_i > 0 and block_i == 0:
                     input_h = resize_nearest_neighbor(input_h, 2)
-                h = tf.nn.elu(h)
+                # h = tf.nn.elu(h)
                 h = self.down_convs[name+'_down_conv2'].construct(
                     h2_plus_z=h).tensor
                 h = input_h + 0.1 * h
-        h = tf.nn.elu(h)
+        # h = tf.nn.elu(h)
         x_mean = self.l_x_z.construct(h=h).reshape([-1, n_samples, self.n_x]
                                                    ).tensor
         x_mean = tf.clip_by_value(x_mean * 0.1, -0.5 + 1 / 512., 0.5 - 1 / 512.)
@@ -254,6 +298,57 @@ class M1(object):
         log_w = log_px_z1 - total_kl_cost
         return lower_bound, log_mean_exp(log_w, 1)
 
+    def generate_samples(self, batch_size):
+        h_top = tf.reshape(self.h_top, [1, 1, 1, -1])
+        h = tf.tile(h_top, [batch_size,
+                            self.groups[-1].map_size,
+                            self.groups[-1].map_size, 1])
+        for group_i, group in reversed(list(enumerate(self.groups))):
+            for block_i in reversed(range(group.num_blocks)):
+                name = 'group_%d/block_%d' % (group_i, block_i)
+                input_h = h
+                h1 = tf.nn.elu(h)
+                h = self.down_convs[name+'_down_conv1'].construct(h1=h1).tensor
+                pz_mean, pz_logsd, h = split(h, -1, [self.n_z, self.n_z,
+                                                         group.num_filters])
+                prior = DiagonalGaussian(pz_mean, 2 * pz_logsd)
+                z = prior.samples(k=1, expand_dim=False)  # (bs,k,map,map,c)
+                h = tf.concat(3, [h, z])
+                if group_i > 0 and block_i == 0:
+                    input_h = resize_nearest_neighbor(input_h, 2)
+                # h = tf.nn.elu(h)
+                h = self.down_convs[name+'_down_conv2'].construct(
+                    h2_plus_z=h).tensor
+                h = input_h + 0.1 * h
+        # h = tf.nn.elu(h)
+        x_mean = self.l_x_z.construct(h=h).tensor
+        x_mean = tf.clip_by_value(x_mean * 0.1, -0.5 + 1 / 512., 0.5 - 1 / 512.)
+        return x_mean
+
+    def test(self, x_test, sess, test_fetch):
+        test_iters = x_test.shape[0] // self.test_batch_size
+        time_test = -time.time()
+        test_lbs = []
+        test_lb_bitss = []
+        test_lls = []
+        test_ll_bitss = []
+        for t in range(test_iters):
+            test_x_batch = x_test[
+                           t * self.test_batch_size:
+                           (t + 1) * self.test_batch_size]
+            test_lb, test_lb_bits, test_ll, test_ll_bits = sess.run(
+                test_fetch, feed_dict={self.x: test_x_batch})
+            test_lbs.append(test_lb)
+            test_lb_bitss.append(test_lb_bits)
+            test_lls.append(test_ll)
+            test_ll_bitss.append(test_ll_bits)
+        time_test += time.time()
+        print('>>> TEST ({:.1f}s)'.format(time_test))
+        print('>> Test lower bound = {}, bits = {}'.format(
+            np.mean(test_lbs), np.mean(test_lb_bitss)))
+        print('>> Test log likelihood = {}, bits = {}'.format(
+            np.mean(test_lls), np.mean(test_ll_bitss)))
+
     def train(self, config):
         tf.set_random_seed(1234)
         np.random.seed(1234)
@@ -264,8 +359,8 @@ class M1(object):
         x_train = x_train.reshape((-1, self.n_x))
         x_test = x_test.reshape((-1, self.n_x))
         learning_rate_ph = tf.placeholder(tf.float32, shape=[])
-        optimizer = tf.train.AdamOptimizer(learning_rate_ph)
-        # optimizer = AdamaxOptimizer(learning_rate_ph)
+        # optimizer = tf.train.AdamOptimizer(learning_rate_ph)
+        optimizer = AdamaxOptimizer(learning_rate_ph)
         with pt.defaults_scope(phase=pt.Phase.train):
             lower_bound, lower_bound_obj = self.advi_klmin(self.batch_size,
                                                            self.lb_samples)
@@ -281,10 +376,13 @@ class M1(object):
         with pt.defaults_scope(phase=pt.Phase.test):
             eval_lower_bound, eval_log_likelihood = self.lb_is_loglikelihood(
                 self.test_batch_size, self.ll_samples)
+            samples = self.generate_samples(self.test_batch_size)
         eval_lower_bound = tf.reduce_mean(eval_lower_bound)
         eval_bits_per_dim = -eval_lower_bound / self.n_x * 1. / np.log(2.)
         eval_log_likelihood = tf.reduce_mean(eval_log_likelihood)
         eval_bits_per_dim_ll = -eval_log_likelihood / self.n_x * 1. / np.log(2.)
+        test_fetch = [eval_lower_bound, eval_bits_per_dim,
+                      eval_log_likelihood, eval_bits_per_dim_ll]
 
         total_size = 0
         params = tf.trainable_variables()
@@ -296,7 +394,6 @@ class M1(object):
         init = tf.initialize_all_variables()
         saver = tf.train.Saver()
         iters = x_train.shape[0] // self.batch_size
-        test_iters = x_test.shape[0] // self.test_batch_size
         start_time = time.time()
         with tf.Session() as sess:
             train_writer = tf.train.SummaryWriter(config.save_dir + '/train',
@@ -324,14 +421,14 @@ class M1(object):
                     bitss.append(bits)
                     train_writer.add_summary(summary, (epoch - 1) * iters + t)
 
-                    if (epoch - 1) * iters + t < 10 or (
-                            (epoch - 1) * iters + t) % 20 == 0:
-                        print('Iteration {} ({:.1f}s): bits_per_dim = {} '
-                              'log_std = {}'.format((epoch - 1) * iters + t,
-                                                    time.time() - start_time,
-                                                    bits,
-                                                    x_logsd))
-                        start_time = time.time()
+                    # if (epoch - 1) * iters + t < 10 or (
+                    #         (epoch - 1) * iters + t) % 20 == 0:
+                    #     print('Iteration {} ({:.1f}s): bits_per_dim = {} '
+                    #           'log_std = {}'.format((epoch - 1) * iters + t,
+                    #                                 time.time() - start_time,
+                    #                                 bits,
+                    #                                 x_logsd))
+                    #     start_time = time.time()
 
                 time_epoch += time.time()
                 print('Epoch {} ({:.1f}s): Lower bound = {} bits = {}'.format(
@@ -340,29 +437,13 @@ class M1(object):
                     saver.save(sess,
                                config.save_dir + "/model_{0}.ckpt".format(epoch))
                 if epoch % config.test_freq == 0:
-                    time_test = -time.time()
-                    test_lbs = []
-                    test_lb_bitss = []
-                    test_lls = []
-                    test_ll_bitss = []
-                    for t in range(test_iters):
-                        test_x_batch = x_test[
-                                       t * self.test_batch_size:
-                                       (t + 1) * self.test_batch_size]
-                        test_lb, test_lb_bits, test_ll, test_ll_bits = sess.run(
-                            [eval_lower_bound, eval_bits_per_dim,
-                             eval_log_likelihood, eval_bits_per_dim_ll],
-                            feed_dict={self.x: test_x_batch})
-                        test_lbs.append(test_lb)
-                        test_lb_bitss.append(test_lb_bits)
-                        test_lls.append(test_ll)
-                        test_ll_bitss.append(test_ll_bits)
-                    time_test += time.time()
-                    print('>>> TEST ({:.1f}s)'.format(time_test))
-                    print('>> Test lower bound = {}, bits = {}'.format(
-                        np.mean(test_lbs), np.mean(test_lb_bitss)))
-                    print('>> Test log likelihood = {}, bits = {}'.format(
-                        np.mean(test_lls), np.mean(test_ll_bitss)))
+                    self.test(x_test, sess, test_fetch)
+                    imgs = sess.run(samples)
+                    save_image_collections(imgs, scaleeach=True,
+                                           filename=os.path.join(
+                                               config.save_dir,
+                                               'samples_{:03d}.png'.format(
+                                                   epoch)))
 
 if __name__ == "__main__":
     tf.flags.DEFINE_integer("epochs", 5000, "max epoch num")
@@ -374,8 +455,8 @@ if __name__ == "__main__":
                            os.environ['MODEL_RESULT_PATH_AND_PREFIX'],
                            'path and prefix to save params')
     tf.flags.DEFINE_integer("save_freq", 10, 'save frequency of param file')
-    tf.flags.DEFINE_integer("test_freq", 5, 'test frequency of param file')
-    tf.flags.DEFINE_string("model_file", "",
+    tf.flags.DEFINE_integer("test_freq", 1, 'test frequency of param file')
+    tf.flags.DEFINE_string("model_file", "/home/yucen/mfs/code/ZhuSuan/results/vae_colored_test/vae_colored_test_20161014_22_29_19/model_450.ckpt",
                            "restoring model file")
     FLAGS = tf.flags.FLAGS
     bottle_neck_group = namedtuple(
