@@ -186,7 +186,7 @@ class M1(object):
                     stride = 2
                 down_convs[name+'_down_conv1'] = (
                     pt.template('h1').
-                    deconv2d(3, group.num_filters + 2 * self.n_z,
+                    deconv2d(3, 1 * group.num_filters + 4 * self.n_z,
                              name=name+'_down_conv1',
                              activation_fn=None))
 
@@ -195,6 +195,10 @@ class M1(object):
                     deconv2d(3, group.num_filters, stride=stride,
                              name=name+'_down_conv2',
                              activation_fn=None))
+
+                # down_convs[name+'_armulticonv2d'] = (
+                #
+                # )
         l_x_z = (pt.template('h').
                  deconv2d(5, 3, stride=2, activation_fn=None))
         return l_x_z, down_convs
@@ -203,6 +207,7 @@ class M1(object):
         h1 = self.x_enc.construct(x=self.x).tensor
         qz_mean = {}
         qz_logsd = {}
+        # up_context = {}
         for group_i, group in enumerate(self.groups):
             for block_i in range(group.num_blocks):
                 name = 'group_%d/block_%d' % (group_i, block_i)
@@ -210,7 +215,7 @@ class M1(object):
                 h2_z = self.up_convs[name+'_up_conv1'].construct(
                     h1=h2_z).tensor
                 qz_mean[name], qz_logsd[name], h2 = split(
-                    h2_z, -1, [self.n_z, self.n_z, group.num_filters])
+                    h2_z, -1, [self.n_z] * 2 + [group.num_filters])
                 h2 = tf.nn.elu(h2)
                 h = self.up_convs[name+'_up_conv2'].construct(h2=h2).tensor
                 if group_i > 0 and block_i == 0:
@@ -227,18 +232,27 @@ class M1(object):
                 input_h = h
                 h1 = tf.nn.elu(h)
                 h = self.down_convs[name+'_down_conv1'].construct(h1=h1).tensor
-                pz_mean, pz_logsd, h = split(h, -1, [self.n_z, self.n_z,
-                                                         group.num_filters])
-                pz_mean = tf.reshape(pz_mean,
-                                     [batch_size, n_samples, group.map_size,
-                                      group.map_size, self.n_z])
-                pz_logsd = tf.reshape(pz_logsd,
-                                      [batch_size, n_samples, group.map_size,
-                                       group.map_size, self.n_z])
+                # pz_mean, pz_logsd, rz_mean, rz_logsd, down_context, h = \
+                #     split(h, -1, [self.n_z] * 4 + [group.num_filters] * 2)
+                pz_mean, pz_logsd, rz_mean, rz_logsd, h = \
+                    split(h, -1, [self.n_z] * 4 + [group.num_filters])
+                pz_mean, pz_logsd, rz_mean, rz_logsd = map(
+                    lambda k: tf.reshape(k, [batch_size, n_samples,
+                                             group.map_size, group.map_size,
+                                             self.n_z]),
+                    [pz_mean, pz_logsd, rz_mean, rz_logsd])
+
                 prior = DiagonalGaussian(pz_mean, 2 * pz_logsd)
-                posterior = DiagonalGaussian(qz_mean[name], 2 * qz_logsd[name])
-                z = posterior.samples(k=n_samples)  # (bs,k,map,map,c)
-                logqs = posterior.logps(z)   # (bs,k,map,map,c)
+                post_z_mean = rz_mean + tf.expand_dims(qz_mean[name], 1)
+                post_z_logsd = rz_logsd + tf.expand_dims(qz_logsd[name], 1)
+
+                # To be done: posterior with precision average and correct mu
+
+                posterior = DiagonalGaussian(post_z_mean, 2 * post_z_logsd)
+                # context = tf.expand_dims(up_context[name], 1) + down_context
+                z = posterior.samples(expand_dim=False)  # (bs,k,map,map,c)
+                logqs = posterior.logps(z, expand_dim=False)  # (bs,k,map,map,c)
+
                 logps = prior.logps(z, expand_dim=False)
                 kl_cost_dic[name] = logqs - logps  # (batch_size,k,map,map,c)
                 z = tf.reshape(z, [-1, group.map_size,
@@ -309,8 +323,7 @@ class M1(object):
                 input_h = h
                 h1 = tf.nn.elu(h)
                 h = self.down_convs[name+'_down_conv1'].construct(h1=h1).tensor
-                pz_mean, pz_logsd, h = split(h, -1, [self.n_z, self.n_z,
-                                                         group.num_filters])
+                pz_mean, pz_logsd, _, _, h = split(h, -1, [self.n_z] * 4 + [group.num_filters])
                 prior = DiagonalGaussian(pz_mean, 2 * pz_logsd)
                 z = prior.samples(k=1, expand_dim=False)  # (bs,k,map,map,c)
                 h = tf.concat(3, [h, z])
@@ -456,7 +469,7 @@ if __name__ == "__main__":
                            'path and prefix to save params')
     tf.flags.DEFINE_integer("save_freq", 10, 'save frequency of param file')
     tf.flags.DEFINE_integer("test_freq", 1, 'test frequency of param file')
-    tf.flags.DEFINE_string("model_file", "/home/yucen/mfs/code/ZhuSuan/results/vae_colored_test/vae_colored_test_20161014_22_29_19/model_450.ckpt",
+    tf.flags.DEFINE_string("model_file", "",
                            "restoring model file")
     FLAGS = tf.flags.FLAGS
     bottle_neck_group = namedtuple(
