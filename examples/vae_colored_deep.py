@@ -133,11 +133,12 @@ class DiagonalGaussian(object):
 
 
 class M1(object):
-    def __init__(self, batch_size, test_batch_size, n_z, groups,
+    def __init__(self, batch_size, test_batch_size, n_z, n_y, groups,
                  kl_min, ll_samples, lb_samples, image_size, beta):
         self.batch_size = batch_size
         self.test_batch_size = test_batch_size
         self.n_z = n_z
+        self.n_y = n_y
         self.groups = groups
         self.kl_min = kl_min
         self.ll_samples = ll_samples
@@ -145,19 +146,42 @@ class M1(object):
         self.image_size = image_size
         self.n_x = 3 * image_size * image_size
         self.beta = beta
-        self.x = tf.placeholder(tf.float32, shape=(None, self.n_x))
+        self.x_l = tf.placeholder(tf.float32, shape=(None, self.n_x))
+        self.x_u = tf.placeholder(tf.float32, shape=(None, self.n_x))
+        self.y_l = tf.placeholder(tf.float32, shape=(None, self.n_y))
         self.x_logsd = tf.get_variable('x_logsd', (),
                                        initializer=tf.zeros_initializer)
-        self.h_top = tf.get_variable('h_top', [self.groups[-1].num_filters],
-                                     initializer=tf.zeros_initializer)
+        # self.h_top = tf.get_variable('h_top', [self.groups[-1].num_filters],
+        #                              initializer=tf.zeros_initializer)
         self.x_enc, self.up_convs = self.q_net()
         self.l_x_z, self.down_convs = self.p_net()
+        self.l_y_x = self.x2y()
+
+    def x2y(self):
+        with pt.defaults_scope(activation_fn=tf.nn.relu):
+            l_y_x = (pt.template('x').
+                     reshape([-1, 32, 32, 1]).
+                     conv2d(3, 32).
+                     conv2d(3, 32).
+                     max_pool(2, 2).
+                     conv2d(3, 64).
+                     conv2d(3, 64).
+                     max_pool(2, 2).
+                     conv2d(3, 128).
+                     conv2d(3, 128).
+                     max_pool(2, 2).
+                     flatten().
+                     fully_connected(500).
+                     fully_connected(self.n_y, activation_fn=tf.nn.softmax)
+                     )
+        return l_y_x
 
     def q_net(self):
         up_convs = {}
         x_enc = (pt.template('x').
                  reshape([-1, self.image_size, self.image_size, 3]).
-                 conv2d(5, self.groups[0].num_filters, stride=2, activation_fn=None))
+                 conv2d(5, self.groups[0].num_filters, stride=2,
+                        activation_fn=None))
 
         for group_i, group in enumerate(self.groups):
             for block_i in range(group.num_blocks):
@@ -197,18 +221,15 @@ class M1(object):
                              name=name+'_down_conv2',
                              activation_fn=None))
 
-                # down_convs[name+'_armulticonv2d'] = (
-                #
-                # )
         l_x_z = (pt.template('h').
                  deconv2d(5, 3, stride=2, activation_fn=None))
         return l_x_z, down_convs
 
-    def forward(self, batch_size, n_samples):
-        h1 = self.x_enc.construct(x=self.x).tensor
+    def forward_labeled(self, batch_size, n_samples):
+        h1 = self.x_enc.construct(x=self.x_l).tensor
         qz_mean = {}
         qz_logsd = {}
-        # up_context = {}
+        # bottom up for labeled data
         for group_i, group in enumerate(self.groups):
             for block_i in range(group.num_blocks):
                 name = 'group_%d/block_%d' % (group_i, block_i)
@@ -222,10 +243,10 @@ class M1(object):
                 if group_i > 0 and block_i == 0:
                     h1 = resize_nearest_neighbor(h1, 0.5)
                 h1 += 0.1 * h
-        h_top = tf.reshape(self.h_top, [1, 1, 1, -1])
-        h = tf.tile(h_top, [batch_size*n_samples,
-                            self.groups[-1].map_size,
+        y_l = tf.reshape(self.y_l, [-1, 1, 1, self.n_y])
+        y_l = tf.tile(y_l, [n_samples, self.groups[-1].map_size,
                             self.groups[-1].map_size, 1])
+        h = y_l
         kl_cost_dic = {}
         for group_i, group in reversed(list(enumerate(self.groups))):
             for block_i in reversed(range(group.num_blocks)):
@@ -233,8 +254,7 @@ class M1(object):
                 input_h = h
                 h1 = tf.nn.elu(h)
                 h = self.down_convs[name+'_down_conv1'].construct(h1=h1).tensor
-                # pz_mean, pz_logsd, rz_mean, rz_logsd, down_context, h = \
-                #     split(h, -1, [self.n_z] * 4 + [group.num_filters] * 2)
+
                 pz_mean, pz_logsd, rz_mean, rz_logsd, h = \
                     split(h, -1, [self.n_z] * 4 + [group.num_filters])
                 pz_mean, pz_logsd, rz_mean, rz_logsd = map(
@@ -261,17 +281,90 @@ class M1(object):
                 h = tf.concat(3, [h, z])
                 if group_i > 0 and block_i == 0:
                     input_h = resize_nearest_neighbor(input_h, 2)
-                # h = tf.nn.elu(h)
+                h = tf.nn.elu(h)
                 h = self.down_convs[name+'_down_conv2'].construct(
                     h2_plus_z=h).tensor
                 h = input_h + 0.1 * h
-        # h = tf.nn.elu(h)
+        h = tf.nn.elu(h)
         x_mean = self.l_x_z.construct(h=h).reshape([-1, n_samples, self.n_x]
                                                    ).tensor
         x_mean = tf.clip_by_value(x_mean * 0.1, -0.5 + 1 / 512., 0.5 - 1 / 512.)
-        x = tf.expand_dims(self.x, 1)
+        x = tf.expand_dims(self.x_l, 1)
         log_px_z1 = discretized_logistic(x_mean, self.x_logsd, sample=x)
         return log_px_z1, kl_cost_dic
+        # E_q(z|x,y) log p(x|y,z) + log p(y) + log p(z) - log q(z|x, y)
+
+    def forward_unlabeled(self, batch_size, n_samples):
+        h1 = self.x_enc.construct(x=self.x_u).tensor
+        qz_mean = {}
+        qz_logsd = {}
+        # bottom up for unlabeled data
+        for group_i, group in enumerate(self.groups):
+            for block_i in range(group.num_blocks):
+                name = 'group_%d/block_%d' % (group_i, block_i)
+                h2_z = tf.nn.elu(h1)
+                h2_z = self.up_convs[name+'_up_conv1'].construct(
+                    h1=h2_z).tensor
+                qz_mean[name], qz_logsd[name], h2 = split(
+                    h2_z, -1, [self.n_z] * 2 + [group.num_filters])
+                h2 = tf.nn.elu(h2)
+                h = self.up_convs[name+'_up_conv2'].construct(h2=h2).tensor
+                if group_i > 0 and block_i == 0:
+                    h1 = resize_nearest_neighbor(h1, 0.5)
+                h1 += 0.1 * h
+        y_l = tf.reshape(self.y_l, [-1, 1, 1, self.n_y])
+        y_l = tf.tile(y_l, [n_samples, self.groups[-1].map_size,
+                            self.groups[-1].map_size, 1])
+
+        y_u = self.l_y_x.construct(x=self.x_u).tensor
+
+        h = y_l
+        kl_cost_dic = {}
+        for group_i, group in reversed(list(enumerate(self.groups))):
+            for block_i in reversed(range(group.num_blocks)):
+                name = 'group_%d/block_%d' % (group_i, block_i)
+                input_h = h
+                h1 = tf.nn.elu(h)
+                h = self.down_convs[name+'_down_conv1'].construct(h1=h1).tensor
+
+                pz_mean, pz_logsd, rz_mean, rz_logsd, h = \
+                    split(h, -1, [self.n_z] * 4 + [group.num_filters])
+                pz_mean, pz_logsd, rz_mean, rz_logsd = map(
+                    lambda k: tf.reshape(k, [batch_size, n_samples,
+                                             group.map_size, group.map_size,
+                                             self.n_z]),
+                    [pz_mean, pz_logsd, rz_mean, rz_logsd])
+
+                prior = DiagonalGaussian(pz_mean, 2 * pz_logsd)
+                post_z_mean = rz_mean + tf.expand_dims(qz_mean[name], 1)
+                post_z_logsd = rz_logsd + tf.expand_dims(qz_logsd[name], 1)
+
+                # To be done: posterior with precision average and correct mu
+
+                posterior = DiagonalGaussian(post_z_mean, 2 * post_z_logsd)
+                # context = tf.expand_dims(up_context[name], 1) + down_context
+                z = posterior.samples(expand_dim=False)  # (bs,k,map,map,c)
+                logqs = posterior.logps(z, expand_dim=False)  # (bs,k,map,map,c)
+
+                logps = prior.logps(z, expand_dim=False)
+                kl_cost_dic[name] = logqs - logps  # (batch_size,k,map,map,c)
+                z = tf.reshape(z, [-1, group.map_size,
+                                   group.map_size, self.n_z])
+                h = tf.concat(3, [h, z])
+                if group_i > 0 and block_i == 0:
+                    input_h = resize_nearest_neighbor(input_h, 2)
+                h = tf.nn.elu(h)
+                h = self.down_convs[name+'_down_conv2'].construct(
+                    h2_plus_z=h).tensor
+                h = input_h + 0.1 * h
+        h = tf.nn.elu(h)
+        x_mean = self.l_x_z.construct(h=h).reshape([-1, n_samples, self.n_x]
+                                                   ).tensor
+        x_mean = tf.clip_by_value(x_mean * 0.1, -0.5 + 1 / 512., 0.5 - 1 / 512.)
+        x = tf.expand_dims(self.x_l, 1)
+        log_px_z1 = discretized_logistic(x_mean, self.x_logsd, sample=x)
+        return log_px_z1, kl_cost_dic
+        # E_q(z|x,y) log p(x|y,z) + log p(y) + log p(z) - log q(z|x, y)
 
     def advi_klmin(self, batch_size, n_samples):
         total_kl_cost = 0
