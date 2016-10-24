@@ -173,19 +173,19 @@ if __name__ == "__main__":
     x_unlabeled_ph = tf.placeholder(tf.float32, shape=(None, n_x))
     y = tf.diag(tf.ones(n_y))
     y_u = tf.reshape(tf.tile(tf.expand_dims(y, 0), (batch_size, 1, 1)),
-                     (-1, n_y))
+                     (-1, n_y))  # y_u: (batch_size*n_y, n_y)
     x_u = tf.reshape(tf.tile(tf.expand_dims(x_unlabeled_ph, 1), (1, n_y, 1)),
-                     (-1, n_x))
+                     (-1, n_x))  # x_u: (batch_size*n_y, n_x)
     inputs = {lx: x_u, ly: y_u}
-    z_outputs = get_output(lz, inputs)
+    z_outputs = get_output(lz, inputs)  # z_outputs: (bs*n_y, n_samples, n_z)
     unlabeled_latent = {'z': z_outputs}
     unlabeled_observed = {'x': x_u, 'y': y_u}
     lb_z = advi(m2, unlabeled_observed, unlabeled_latent, reduction_indices=1)
     # sum over y
-    lb_z = tf.reshape(lb_z, (-1, n_y))
+    lb_z = tf.reshape(lb_z, (-1, n_y))  # lb_z: (batch_size, n_y)
     qy = qy_x.construct(x=x_unlabeled_ph)
     qy += 1e-8
-    qy /= tf.reduce_sum(qy, 1, keep_dims=True)
+    qy /= tf.reduce_sum(qy, 1, keep_dims=True)  # qy: (batch_size, n_y)
     log_qy = tf.log(qy)
     unlabeled_lower_bound = tf.reduce_mean(
         tf.reduce_sum(qy * (lb_z - log_qy), 1))
