@@ -138,6 +138,7 @@ class M1(object):
                  kl_min, ll_samples, lb_samples, image_size, beta):
         self.batch_size = batch_size
         self.test_batch_size = test_batch_size
+        self.bs_ph = tf.placeholder(tf.int32, shape=[])
         self.n_z = n_z
         self.n_y = n_y
         self.groups = groups
@@ -268,7 +269,6 @@ class M1(object):
                                              group.map_size, group.map_size,
                                              self.n_z]),
                     [pz_mean, pz_logsd, rz_mean, rz_logsd])
-
                 prior = DiagonalGaussian(pz_mean, 2 * pz_logsd)
                 post_z_mean = rz_mean + tf.expand_dims(qz_mean[name], 1)
                 post_z_logsd = rz_logsd + tf.expand_dims(qz_logsd[name], 1)
@@ -298,7 +298,7 @@ class M1(object):
         return log_px_z1 + log_py, kl_cost_dic
         # E_q(z|x,y) log p(x|y,z) + log p(y) + log p(z) - log q(z|x, y)
 
-    def advi_klmin(self, input_x, input_y, batch_size, n_samples):
+    def advi_klmin(self, input_x, input_y, n_samples):
         total_kl_cost = 0
         total_kl_obj = 0
         log_px_z1, kl_cost_dic = self.forward(input_x, input_y,
@@ -329,44 +329,45 @@ class M1(object):
 
         return lower_bound, lower_bound_obj
 
-    def lb_is_loglikelihood(self, input_x, input_y, n_samples):
-        log_px_z1, kl_cost_dic = self.forward(input_x, input_y,
-                                              n_samples)
-        total_kl_cost = 0
-        for z in kl_cost_dic:
-            total_kl_cost += tf.reduce_sum(kl_cost_dic[z], [2, 3, 4])
-        lower_bound = tf.reduce_mean(log_px_z1 - total_kl_cost,
-                                     reduction_indices=1)
-        log_w = log_px_z1 - total_kl_cost
-        return lower_bound, log_mean_exp(log_w, 1)
+    # def lb_is_loglikelihood(self, input_x, input_y, n_samples):
+    #     log_px_z1, kl_cost_dic = self.forward(input_x, input_y,
+    #                                           n_samples)
+    #     total_kl_cost = 0
+    #     for z in kl_cost_dic:
+    #         total_kl_cost += tf.reduce_sum(kl_cost_dic[z], [2, 3, 4])
+    #     lower_bound = tf.reduce_mean(log_px_z1 - total_kl_cost,
+    #                                  reduction_indices=1)
+    #     log_w = log_px_z1 - total_kl_cost
+    #     return lower_bound, log_mean_exp(log_w, 1)
 
-    def generate_samples(self, batch_size):
-        h_top = tf.reshape(self.y_l, [-1, 1, 1, self.n_y])
-        h = tf.tile(h_top, [1,
-                            self.groups[-1].map_size,
-                            self.groups[-1].map_size, 1])
-        for group_i, group in reversed(list(enumerate(self.groups))):
-            for block_i in reversed(range(group.num_blocks)):
-                name = 'group_%d/block_%d' % (group_i, block_i)
-                input_h = h
-                h1 = tf.nn.elu(h)
-                h = self.down_convs[name+'_down_conv1'].construct(h1=h1).tensor
-                pz_mean, pz_logsd, _, _, h = split(h, -1, [self.n_z] * 4 + [group.num_filters])
-                prior = DiagonalGaussian(pz_mean, 2 * pz_logsd)
-                z = prior.samples(k=1, expand_dim=False)  # (bs,k,map,map,c)
-                h = tf.concat(3, [h, z])
-                if group_i > 0 and block_i == 0:
-                    input_h = resize_nearest_neighbor(input_h, 2)
-                h = tf.nn.elu(h)
-                h = self.down_convs[name+'_down_conv2'].construct(
-                    h2_plus_z=h).tensor
-                h = input_h + 0.1 * h
-        h = tf.nn.elu(h)
-        x_mean = self.l_x_z.construct(h=h).tensor
-        x_mean = tf.clip_by_value(x_mean * 0.1, -0.5 + 1 / 512., 0.5 - 1 / 512.)
-        return x_mean
+    # def generate_samples(self, batch_size):
+    #     h_top = tf.reshape(self.y_l, [-1, 1, 1, self.n_y])
+    #     h = tf.tile(h_top, [1,
+    #                         self.groups[-1].map_size,
+    #                         self.groups[-1].map_size, 1])
+    #     for group_i, group in reversed(list(enumerate(self.groups))):
+    #         for block_i in reversed(range(group.num_blocks)):
+    #             name = 'group_%d/block_%d' % (group_i, block_i)
+    #             input_h = h
+    #             h1 = tf.nn.elu(h)
+    #             h = self.down_convs[name+'_down_conv1'].construct(h1=h1).tensor
+    #             pz_mean, pz_logsd, _, _, h = split(h, -1, [self.n_z] * 4 + [group.num_filters])
+    #             prior = DiagonalGaussian(pz_mean, 2 * pz_logsd)
+    #             z = prior.samples(k=1, expand_dim=False)  # (bs,k,map,map,c)
+    #             h = tf.concat(3, [h, z])
+    #             if group_i > 0 and block_i == 0:
+    #                 input_h = resize_nearest_neighbor(input_h, 2)
+    #             h = tf.nn.elu(h)
+    #             h = self.down_convs[name+'_down_conv2'].construct(
+    #                 h2_plus_z=h).tensor
+    #             h = input_h + 0.1 * h
+    #     h = tf.nn.elu(h)
+    #     x_mean = self.l_x_z.construct(h=h).tensor
+    #     x_mean = tf.clip_by_value(x_mean * 0.1, -0.5 + 1 / 512., 0.5 - 1 / 512.)
+    #     return x_mean
 
     def test(self, x_test, t_test, sess, test_fetch):
+        print "Test stage!"
         test_iters = x_test.shape[0] // self.test_batch_size
         time_test = -time.time()
         test_lls_labeled = []
@@ -380,13 +381,14 @@ class M1(object):
             test_ll_labeled, test_ll_unlabeled, test_acc = sess.run(
                 test_fetch, feed_dict={self.x_l: test_x_batch,
                                        self.y_l: test_y_batch,
-                                       self.x_u: test_x_batch})
+                                       self.x_u: test_x_batch,
+                                       self.bs_ph: self.test_batch_size})
             test_lls_labeled.append(test_ll_labeled)
             test_lls_unlabeled.append(test_ll_unlabeled)
             test_accs.append(test_acc)
         time_test += time.time()
         print('>>> TEST ({:.1f}s)'.format(time_test))
-        print('>> Test lower bound: labeled = {}, unlabeled = {}'.
+        print('>> Test LB(bits): labeled = {}, unlabeled = {}'.
               format(np.mean(test_lls_labeled),
                      np.mean(test_lls_unlabeled)))
         print('>> Test accuracy: {:.2f}%'.format(
@@ -407,12 +409,12 @@ class M1(object):
             (-1, self.n_x)), [x_labeled, x_unlabeled, x_test])
 
         learning_rate_ph = tf.placeholder(tf.float32, shape=[])
-        optimizer = AdamaxOptimizer(learning_rate_ph)
+        optimizer = AdamaxOptimizer(learning_rate_ph, beta1=0.1)
 
         y_u = tf.diag(tf.ones(self.n_y))
         # x_u and y_u shape: (batch_size*n_y, n_x)
         y_u = tf.reshape(tf.tile(tf.expand_dims(y_u, 0),
-                                 (self.batch_size, 1, 1)), (-1, 1, 1, self.n_y))
+                                 (self.bs_ph, 1, 1)), (-1, 1, 1, self.n_y))
         x_u = tf.reshape(tf.tile(tf.expand_dims(self.x_u, 1), (1, self.n_y, 1)),
                          (-1, self.n_x))
 
@@ -420,9 +422,9 @@ class M1(object):
 
             labeled_lower_bound, labeled_lower_bound_obj = \
                 self.advi_klmin(self.x_l, self.y_l,
-                                self.batch_size, self.lb_samples)
+                                self.lb_samples)
             unlabeled_lb_z, unlabeled_lb_obj_z = \
-                self.advi_klmin(x_u, y_u, self.batch_size, self.lb_samples)
+                self.advi_klmin(x_u, y_u, self.lb_samples)
 
         labeled_lower_bound = tf.reduce_mean(labeled_lower_bound)
         labeled_lower_bound_obj = tf.reduce_mean(labeled_lower_bound_obj)
@@ -460,7 +462,7 @@ class M1(object):
         grads_and_vars = optimizer.compute_gradients(cost)
         # merged = tf.merge_all_summaries()
         infer = optimizer.apply_gradients(grads_and_vars)
-        test_fetch = [labeled_lower_bound, unlabeled_lower_bound, acc]
+        test_fetch = [bits_per_dim_l, bits_per_dim_u, acc]
         total_size = 0
         params = tf.trainable_variables()
         for i in params:
@@ -471,7 +473,7 @@ class M1(object):
         init = tf.initialize_all_variables()
         saver = tf.train.Saver()
         iters = x_unlabeled.shape[0] // self.batch_size
-        start_time = time.time()
+        # start_time = time.time()
         with tf.Session() as sess:
             # train_writer = tf.train.SummaryWriter(config.save_dir + '/train',
             #                                       sess.graph)
@@ -495,11 +497,12 @@ class M1(object):
                                                     (t + 1) * self.batch_size]
 
                     _, lb_labeled, lb_unlabeled, train_acc, x_logsd = sess.run(
-                        [infer, labeled_lower_bound, unlabeled_lower_bound, acc,
+                        [infer, bits_per_dim_l, bits_per_dim_u, acc,
                          self.x_logsd], feed_dict={
                             self.x_l: x_labeled_batch,
                             self.y_l: y_labeled_batch,
                             self.x_u: x_unlabeled_batch,
+                            self.bs_ph: self.batch_size,
                             learning_rate_ph: config.learning_rate})
                     lbs_labeled.append(lb_labeled)
                     lbs_unlabeled.append(lb_unlabeled)
@@ -518,7 +521,7 @@ class M1(object):
                     #     start_time = time.time()
 
                 time_epoch += time.time()
-                print('Epoch {} ({:.1f}s), Lower bound: labeled = {:.3f}, '
+                print('Epoch {} ({:.1f}s), LB(bits): labeled = {:.3f}, '
                       'unlabeled = {:.3f} Accuracy: {:.2f}%'.
                       format(epoch, time_epoch, np.mean(lbs_labeled),
                              np.mean(lbs_unlabeled),
@@ -539,7 +542,7 @@ class M1(object):
 
 if __name__ == "__main__":
     tf.flags.DEFINE_integer("epochs", 5000, "max epoch num")
-    tf.flags.DEFINE_integer("learning_rate", 1e-3, "")
+    tf.flags.DEFINE_integer("learning_rate", 2e-3, "")
     tf.flags.DEFINE_integer("anneal_lr_freq", 200,
                             "learning rate decay every epochs")
     tf.flags.DEFINE_integer("anneal_lr_rate", 0.75, "learning rate decay rate")
@@ -547,7 +550,7 @@ if __name__ == "__main__":
                            os.environ['MODEL_RESULT_PATH_AND_PREFIX'],
                            'path and prefix to save params')
     tf.flags.DEFINE_integer("save_freq", 10, 'save frequency of param file')
-    tf.flags.DEFINE_integer("test_freq", 5, 'test frequency of param file')
+    tf.flags.DEFINE_integer("test_freq", 1, 'test frequency of param file')
     tf.flags.DEFINE_string("model_file", "",
                            "restoring model file")
     FLAGS = tf.flags.FLAGS
@@ -560,6 +563,6 @@ if __name__ == "__main__":
         bottle_neck_group(2, 64, 4)
     ]
     model = M1(batch_size=16, test_batch_size=100, n_z=32, n_y=10,
-               groups=groups, kl_min=0.1, ll_samples=10, lb_samples=1,
+               groups=groups, kl_min=0.1, ll_samples=1, lb_samples=1,
                image_size=32, beta=1200.)
     model.train(FLAGS)
