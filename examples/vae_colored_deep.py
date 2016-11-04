@@ -312,7 +312,7 @@ class M1(object):
                 kl_ave = tf.tile(kl_ave, [tf.shape(log_px_z1)[0], n_samples, 1])
                 kl_obj = tf.reduce_sum(kl_ave, [2])
             else:
-                kl_obj = tf.reduce_sum(kl_cost, [2, 3, 4])
+                kl_obj = tf.reduce_sum(kl_cost, [2, 3, 4])  # (bs, k)
             kl_cost = tf.reduce_sum(kl_cost, [2, 3, 4])
             total_kl_cost += kl_cost
             total_kl_obj += kl_obj
@@ -320,7 +320,7 @@ class M1(object):
             # tf.scalar_summary("train_sum/kl_obj_" + z, tf.reduce_mean(kl_obj))
 
         lower_bound = tf.reduce_mean(log_px_z1 - total_kl_cost,
-                                     reduction_indices=1)
+                                     reduction_indices=1)  # (bs, )
         lower_bound_obj = tf.reduce_mean(log_px_z1 - total_kl_obj,
                                          reduction_indices=1)
         # tf.scalar_summary("train_sum/log_pxz", -tf.reduce_mean(log_px_z1))
@@ -424,16 +424,16 @@ class M1(object):
                 self.advi_klmin(self.x_l, self.y_l,
                                 self.lb_samples)
             unlabeled_lb_z, unlabeled_lb_obj_z = \
-                self.advi_klmin(x_u, y_u, self.lb_samples)
+                self.advi_klmin(x_u, y_u, self.lb_samples)  # (bs*ny, )
 
         labeled_lower_bound = tf.reduce_mean(labeled_lower_bound)
         labeled_lower_bound_obj = tf.reduce_mean(labeled_lower_bound_obj)
 
         unlabeled_lb_z, unlabeled_lb_obj_z = \
-            map(lambda l: tf.reshape(l, (-1, self.n_y)),
+            map(lambda l: tf.reshape(l, (-1, self.n_y)),  # (bs, ny)
                 [unlabeled_lb_z, unlabeled_lb_obj_z])
 
-        qy = self.l_y_x.construct(x=self.x_u).tensor
+        qy = self.l_y_x.construct(x=self.x_u).tensor  # (bs, ny)
         qy += 1e-8
         qy /= tf.reduce_sum(qy, 1, keep_dims=True)
         log_qy = tf.log(qy)
