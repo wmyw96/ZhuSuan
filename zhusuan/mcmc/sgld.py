@@ -5,7 +5,6 @@ from __future__ import absolute_import
 from __future__ import division
 
 import tensorflow as tf
-import math
 from copy import copy
 
 class SGLD:
@@ -21,7 +20,7 @@ class SGLD:
         self.ratio=ratio
 
         self.t = tf.Variable(0.0)
-        new_t = tf.assign(self.t, self.t+1)
+        new_t = tf.assign(self.t, tf.add(self.t, 1.0))
 
         #Get step size
         def get_step_size(i):
@@ -52,9 +51,11 @@ class SGLD:
         # def loop_body(self,i, current_q):
         _, priorgrads = get_prior_gradient(current_q)
         _, minibatch_likeligrads = get_likelihood_gradient(current_q)
-        total_likeligrads = self.ratio*minibatch_likeligrads
-        current_q = map(lambda x: x + 0.5*get_step_size(new_t)*(priorgrads+total_likeligrads)+get_injected_noise(new_t),
-                            current_q)
+        total_likeligrads = map(lambda x: self.ratio * x, minibatch_likeligrads)
+        #print(self.q[0].get_shape(), current_q[0].get)
+        current_q = map(lambda (x, prior_g, likelihood_g, noise):
+                        x + 0.5*get_step_size(new_t)*(prior_g+likelihood_g)+noise,
+                            zip(current_q, priorgrads, total_likeligrads, get_injected_noise(new_t)))
             # return [i+1, current_q]
 
         # i = tf.constant(0)

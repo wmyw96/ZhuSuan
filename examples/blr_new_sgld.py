@@ -1,6 +1,8 @@
 
 # -*- coding: utf-8 -*-
 
+from __future__ import absolute_import
+from __future__ import division
 import tensorflow as tf
 import numpy as np
 import math
@@ -19,7 +21,7 @@ tf.set_random_seed(0)
 # Load MNIST dataset
 n =50000
 n_dims = 784
-minibatch_size = 500
+minibatch_size = 100
 R = n/minibatch_size
 mu = 0
 sigma = 1./math.sqrt(n)
@@ -87,7 +89,7 @@ get_log_joint = tf.reduce_sum(norm.logpdf(beta, 0, sigma)) + \
                 tf.reduce_sum(bernoulli.logpdf(y, logits))
 
 # Sampler
-sampler = SGLD(sample_threshold=10^-2, a=1.26e-10, b=0.023, gamma=0.55)
+sampler = SGLD(sample_threshold=10^-2, a=1.26e-10, b=0.023, gamma=0.2)
 sample_step, step_size = sampler.sample(
     log_likelihood, log_prior, vars, ratio)
 
@@ -99,7 +101,7 @@ sess.run(tf.initialize_all_variables())
 sess.run(update_data, feed_dict={x_input: X_train})
 
 # optimizer = GradientDescentOptimizer(sess, {y: y_train}, -get_log_joint,
-#                                      vars, stepsize_tol=1e-9, tol=1e-5)
+#                                      vars, stepsize_tol=1e-9, tol=1e-7)
 # optimizer.optimize()
 
 chain_length = 100
@@ -113,15 +115,16 @@ test_scores = np.zeros((X_test.shape[0]))
 all_samples = []
 
 for i in range(chain_length):
-    # Feed data in
-    sess.run(update_data, feed_dict={x_input: X_train})
+    #Feed data in
     r = np.random.permutation(X_train.shape[0])
-    X_train = X_train[r,:]
+    X_train = X_train[r, :]
     y_train = y_train[r]
-    sess.run(update_data_minibatch, feed_dict={x_input_minibatch: X_train[0:minibatch_size]})
-    model, ss = sess.run([sample_step, step_size],
-                              feed_dict={y_minibatch: y_train[0:minibatch_size], ratio: R})
-    # Compute model sum
+    sess.run(update_data, feed_dict={x_input: X_train})
+    for j in range(int(R)):
+        sess.run(update_data_minibatch, feed_dict={x_input_minibatch: X_train[j*minibatch_size:(j+1)*minibatch_size]})
+        model, ss = sess.run([sample_step, step_size],
+                                  feed_dict={y_minibatch: y_train[j*minibatch_size:(j+1)*minibatch_size], ratio: R})
+    #Compute model sum
     if i == burnin:
         sample_sum = model
     elif i > burnin:
