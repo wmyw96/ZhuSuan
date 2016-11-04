@@ -66,3 +66,4 @@ class SGLD:
                                     zip(self.q, current_q))
         current_step_size = get_step_size(new_t)
         return new_q, current_step_size
+
