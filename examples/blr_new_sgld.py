@@ -57,6 +57,8 @@ ratio = tf.placeholder(tf.float32, [])
 # Model
 beta = tf.Variable(np.zeros(n_dims), dtype=tf.float32, name='beta')
 vars = [beta]
+r = tf.Variable(np.zeros(n_dims), dtype=tf.float32, name='beta')
+squared_learning_rate = [r]
 
 def log_prior(var_list):
     beta = var_list[0]
@@ -89,9 +91,10 @@ get_log_joint = tf.reduce_sum(norm.logpdf(beta, 0, sigma)) + \
                 tf.reduce_sum(bernoulli.logpdf(y, logits))
 
 # Sampler
-sampler = SGLD(sample_threshold=10^-2, a=1.26e-10, b=0.023, gamma=0.2)
-sample_step, step_size = sampler.sample(
-    log_likelihood, log_prior, vars, ratio)
+sampler = SGLD(sample_threshold=10^-2, a=1.26e-10, b=0.023,
+               gamma=0.1, global_learning_rate=2.5e-10)
+sample_step, step_size = sampler.sample(log_likelihood, log_prior, vars, ratio,
+            minibatch_size, squared_learning_rate, RMS_decay_rate=0.8, RMS=False)
 
 # Session
 sess = tf.Session()
@@ -124,6 +127,8 @@ for i in range(chain_length):
         sess.run(update_data_minibatch, feed_dict={x_input_minibatch: X_train[j*minibatch_size:(j+1)*minibatch_size]})
         model, ss = sess.run([sample_step, step_size],
                                   feed_dict={y_minibatch: y_train[j*minibatch_size:(j+1)*minibatch_size], ratio: R})
+        # if j==1:
+        #     print(np.sqrt(n_dims/np.sum(ss,axis=1)))
     #Compute model sum
     if i == burnin:
         sample_sum = model
