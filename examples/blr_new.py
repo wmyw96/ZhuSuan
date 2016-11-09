@@ -5,12 +5,18 @@ import tensorflow as tf
 import numpy as np
 import math
 import os
+import sys
 from dataset import load_uci_german_credits, load_binary_mnist_realval
-from zhusuan.optimization.gradient_descent_optimizer import \
-    GradientDescentOptimizer
-from zhusuan.distributions import norm, bernoulli
-from zhusuan.mcmc.hmc import HMC
-from zhusuan.diagnostics import ESS
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+	from zhusuan.optimization.gradient_descent_optimizer import \
+		GradientDescentOptimizer
+	from zhusuan.distributions import norm, bernoulli
+	from zhusuan.mcmc.hmc import HMC
+	from zhusuan.diagnostics import ESS
+except:
+	raise ImportError()
 
 float_eps = 1e-30
 

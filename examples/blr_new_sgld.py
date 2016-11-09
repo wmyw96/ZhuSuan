@@ -6,20 +6,26 @@ from __future__ import division
 import tensorflow as tf
 import numpy as np
 import math
+import sys
 import os
 from dataset import load_uci_german_credits, load_binary_mnist_realval
-from zhusuan.optimization.gradient_descent_optimizer import \
-    GradientDescentOptimizer
-from zhusuan.distributions import norm, bernoulli
-from zhusuan.mcmc.sgld import SGLD
-from zhusuan.diagnostics import ESS
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+	from zhusuan.optimization.gradient_descent_optimizer import \
+		GradientDescentOptimizer
+	from zhusuan.distributions import norm, bernoulli
+	from zhusuan.mcmc.sgld import SGLD
+	from zhusuan.diagnostics import ESS
+except:
+	raise ImportError()
 
 float_eps = 1e-30
 
 tf.set_random_seed(0)
 
 # Load MNIST dataset
-n =50000
+n = 50000
 n_dims = 784
 minibatch_size = 100
 R = n/minibatch_size
@@ -127,7 +133,7 @@ for i in range(chain_length):
         sess.run(update_data_minibatch, feed_dict={x_input_minibatch: X_train[j*minibatch_size:(j+1)*minibatch_size]})
         model, ss = sess.run([sample_step, step_size],
                                   feed_dict={y_minibatch: y_train[j*minibatch_size:(j+1)*minibatch_size], ratio: R})
-        if j==1:
+       if j==1:
             print(np.sqrt(n_dims/np.sum(ss,axis=1)))
     #Compute model sum
     if i == burnin:
