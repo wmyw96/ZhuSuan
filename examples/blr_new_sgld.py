@@ -133,7 +133,7 @@ for i in range(chain_length):
         sess.run(update_data_minibatch, feed_dict={x_input_minibatch: X_train[j*minibatch_size:(j+1)*minibatch_size]})
         model, ss = sess.run([sample_step, step_size],
                                   feed_dict={y_minibatch: y_train[j*minibatch_size:(j+1)*minibatch_size], ratio: R})
-       if j==1:
+        if j==1:
             print(np.sqrt(n_dims/np.sum(ss,axis=1)))
     #Compute model sum
     if i == burnin:
