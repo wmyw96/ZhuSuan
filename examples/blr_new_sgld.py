@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
 	from zhusuan.optimization.gradient_descent_optimizer import \
 		GradientDescentOptimizer
-	from zhusuan.distributions import norm, bernoulli
+	from zhusuan.distributions_old import norm, bernoulli
 	from zhusuan.mcmc.sgld import SGLD
 	from zhusuan.diagnostics import ESS
 except:
