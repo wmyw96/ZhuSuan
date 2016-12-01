@@ -18,13 +18,13 @@ try:
     from zhusuan.variational import advi
     from zhusuan.evaluation import is_loglikelihood
     from zhusuan.distributions import logistic
-    from zhusuan.optimization.adamax import AdamaxOptimizer
 except:
     raise ImportError()
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     import dataset
+    import utils
 except:
     raise ImportError()
 
@@ -226,7 +226,7 @@ if __name__ == "__main__":
     x = tf.placeholder(tf.float32, shape=(None, n_x), name='x')
     n = tf.shape(x)[0]
     # optimizer = tf.train.AdamOptimizer(learning_rate_ph, epsilon=1e-8)
-    optimizer = AdamaxOptimizer(learning_rate_ph, beta1=0.9, beta2=0.999)
+    optimizer = utils.AdamaxOptimizer(learning_rate_ph, beta1=0.9, beta2=0.999)
     model = M1(n_x, n, n_particles, is_training)
     variational, lz0, lz1, lz2, lz3 = q_net(x, n_xl, n_particles, is_training)
     z0_output, z1_output, z2_output, z3_output = variational.get_output([lz0, lz1, lz2, lz3])
