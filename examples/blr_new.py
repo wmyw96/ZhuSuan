@@ -1,24 +1,32 @@
-
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import tensorflow as tf
-import numpy as np
+from __future__ import absolute_import
+from __future__ import print_function
+from __future__ import division
 import math
 import os
 import sys
-from dataset import load_uci_german_credits, load_binary_mnist_realval
+
+import tensorflow as tf
+import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
-	from zhusuan.optimization.gradient_descent_optimizer import \
-		GradientDescentOptimizer
-	from zhusuan.distributions_old import norm, bernoulli
-	from zhusuan.mcmc.hmc import HMC
-	from zhusuan.diagnostics import ESS
+    from zhusuan.model import *
+    from zhusuan.distributions_old import norm, bernoulli
+    # from zhusuan.distributions import norm, bernoulli
+    from zhusuan.mcmc.hmc import HMC
+    from zhusuan.diagnostics import ESS
 except:
-	raise ImportError()
+    raise ImportError()
 
-float_eps = 1e-30
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import dataset
+except:
+    raise ImportError()
+
 
 tf.set_random_seed(0)
 
@@ -26,11 +34,12 @@ tf.set_random_seed(0)
 n = 600
 n_dims = 784
 mu = 0
-sigma = 1./math.sqrt(n)
+sigma = 1. / math.sqrt(n)
 
 data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             'data', 'mnist.pkl.gz')
-X_train, y_train, _, _, X_test, y_test = load_binary_mnist_realval(data_path)
+                         'data', 'mnist.pkl.gz')
+X_train, y_train, _, _, X_test, y_test = \
+    dataset.load_binary_mnist_realval(data_path)
 X_train = X_train[:n] * 256
 y_train = y_train[:n]
 X_test = X_test * 256
@@ -63,7 +72,7 @@ def log_joint(var_list):
     scores = tf.reduce_sum(x * beta, reduction_indices=(1,))
     logits = tf.nn.sigmoid(scores)
     log_joint = tf.reduce_sum(norm.logpdf(beta, 0, sigma)) + \
-                     tf.reduce_sum(bernoulli.logpdf(y, logits))
+        tf.reduce_sum(bernoulli.logpdf(y, logits))
     return log_joint
 
 # Evaluate
@@ -78,7 +87,10 @@ get_log_joint = tf.reduce_sum(norm.logpdf(beta, 0, sigma)) + \
 chain_length = 100
 burnin = 50
 
-sampler = HMC(step_size=1e-5, num_leapfrog_steps=10, target_acceptance_rate=0.8, m_adapt=burnin)
+sampler = HMC(step_size=1e-5,
+              n_leapfrogs=10,
+              target_acceptance_rate=0.8,
+              m_adapt=burnin)
 sample_steps = sampler.sample(log_joint, vars, mass)
 
 # Session
@@ -87,10 +99,6 @@ sess = tf.Session()
 # Find a MAP solution
 sess.run(tf.initialize_all_variables())
 sess.run(update_data, feed_dict={x_input: X_train})
-
-#optimizer = GradientDescentOptimizer(sess, {y: y_train}, -get_log_joint,
-#                                     vars, stepsize_tol=1e-9, tol=1e-5)
-#optimizer.optimize()
 
 sample_sum = []
 num_samples = chain_length - burnin
@@ -103,7 +111,7 @@ for i in range(chain_length):
     # Feed data in
     sess.run(update_data, feed_dict={x_input: X_train})
     model, p, oh, nh, acc, t, ss = sess.run(sample_steps,
-                              feed_dict={y: y_train})
+                                            feed_dict={y: y_train})
 
     # Compute model sum
     if i == burnin:
@@ -116,14 +124,14 @@ for i in range(chain_length):
 
     # evaluate
     n_train_c, train_pred_c, lj = sess.run(
-        (n_correct, logits, get_log_joint), feed_dict={y: y_train})
+        [n_correct, logits, get_log_joint], feed_dict={y: y_train})
     sess.run(update_data, feed_dict={x_input: X_test})
-    n_test_c, test_pred_c = sess.run((n_correct, logits),
+    n_test_c, test_pred_c = sess.run([n_correct, logits],
                                      feed_dict={y: y_test})
-    print('Iteration %d, Log likelihood = %f, Acceptance rate = %f, Step size = %f, Train set accuracy = %f, '
-          'test set accuracy = %f' %
-          (i, lj, acc, ss, (float(n_train_c) / X_train.shape[0]),
-           (float(n_test_c) / X_test.shape[0])))
+    print('Iteration %d, Log likelihood = %f, Acceptance rate = %f, '
+          'Step size = %f, Train set accuracy = %f, test set accuracy = %f' % (
+              i, lj, acc, ss, float(n_train_c) / X_train.shape[0],
+              float(n_test_c) / X_test.shape[0]))
 
     # Accumulate scores
     if i >= burnin:

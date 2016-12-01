@@ -52,16 +52,22 @@ def test_hmc():
     def log_posterior(x):
         return -0.5 * tf.square(x[0])
 
-    sess = tf.Session()
-    sess.run(tf.initialize_all_variables())
-
-    n_samples = 1000
+    n_samples = 10000
     sampler = HMC(step_size=0.1)
-    sample_step, _, _, _ = sampler.sample(log_posterior, [x])
+    mass = [tf.Variable(tf.ones([]))]
+    sample_step, _, _, _, _, _, _ = sampler.sample(log_posterior, [x], mass)
 
-    samples = []
-    for i in range(n_samples):
-        samples.append(sess.run(sample_step))
+    with tf.Session() as sess:
+        sess.run(tf.initialize_all_variables())
+        samples = []
+        for i in range(n_samples):
+            samples.append(sess.run(sample_step))
 
+    samples = np.squeeze(np.array(samples), 1)[5000:]
+    print(np.mean(samples))
+    print(np.var(samples))
     p_value = scipy.stats.normaltest(samples)
-    assert(p_value > 0.1)
+    assert p_value > 0.1
+    import matplotlib.pyplot as plt
+    plt.hist(samples, bins=50)
+    plt.show()
