@@ -168,28 +168,29 @@ class HMC:
     def sample(self, log_posterior, var_list=None, mass=None):
         self.q = copy(var_list)
         self.shapes = [x.initialized_value().get_shape() for x in self.q]
-        variance_estimator = VarianceEstimator(self.shapes)
-
-        # Estimate covariance
-        add_op = tf.cond(
-            tf.logical_and(self.t >= self.init_buffer,
-                           self.t < self.m_adapt - self.term_buffer),
-            lambda: variance_estimator.add(self.q),
-            lambda: [tf.constant(1.0)] + self.q + self.q)
-
-        def update_mass():
-            new_mass = [tf.assign(x, y) for x, y in
-                        zip(mass, variance_estimator.precision())]
-            with tf.control_dependencies(new_mass):
-                variance_estimator.reset()
-            return new_mass
-
-        with tf.control_dependencies(add_op):
-            current_mass = tf.cond(tf.equal(self.t, self.next_window),
-                                   update_mass,
-                                   lambda: mass)
-            if len(self.shapes) == 1:
-                current_mass = [current_mass]
+        # variance_estimator = VarianceEstimator(self.shapes)
+        #
+        # # Estimate covariance
+        # add_op = tf.cond(
+        #     tf.logical_and(self.t >= self.init_buffer,
+        #                    self.t < self.m_adapt - self.term_buffer),
+        #     lambda: variance_estimator.add(self.q),
+        #     lambda: [tf.constant(1.0)] + self.q + self.q)
+        #
+        # def update_mass():
+        #     new_mass = [tf.assign(x, y) for x, y in
+        #                 zip(mass, variance_estimator.precision())]
+        #     with tf.control_dependencies(new_mass):
+        #         variance_estimator.reset()
+        #     return new_mass
+        #
+        # with tf.control_dependencies(add_op):
+        #     current_mass = tf.cond(tf.equal(self.t, self.next_window),
+        #                            update_mass,
+        #                            lambda: mass)
+        #     if len(self.shapes) == 1:
+        #         current_mass = [current_mass]
+        current_mass = mass
 
         p = random_momentum(current_mass)
 
@@ -236,6 +237,7 @@ class HMC:
                 loop_body,
                 [self.step_size, tf.constant(1.0), tf.constant(True)]
             )
+            # init_step_size_ = tf.Print(init_step_size_, [init_step_size_, new_acceptance_rate])
             return tf.assign(self.step_size, init_step_size_)
 
         new_step_size = tf.cond(
@@ -289,21 +291,23 @@ class HMC:
                                  for x, y in zip(self.q, current_q)],
                         lambda: self.q)
 
+        # This is because tf.cond returns a single Tensor if the branch
+        # function returns a list of a single Tensor.
         if len(self.q) == 1:
             new_q = [new_q]
 
         # Tune step size
-        with tf.control_dependencies([acceptance_rate]):
-            new_stepsize = tf.cond(
-                tf.logical_or(tf.equal(self.t, 0),
-                              tf.equal(self.t, self.next_window)),
-                lambda: self.step_size_tuner.restart_and_tune(new_step_size,
-                                                              acceptance_rate),
-                lambda: self.step_size_tuner.tune(acceptance_rate))
-            update_stepsize = tf.assign(self.step_size, new_stepsize)
-
-        with tf.control_dependencies([update_stepsize]):
-            update_t = tf.assign(self.t, self.t + 1)
+        # with tf.control_dependencies([acceptance_rate]):
+        #     new_stepsize = tf.cond(
+        #         tf.logical_or(tf.equal(self.t, 0),
+        #                       tf.equal(self.t, self.next_window)),
+        #         lambda: self.step_size_tuner.restart_and_tune(new_step_size,
+        #                                                       acceptance_rate),
+        #         lambda: self.step_size_tuner.tune(acceptance_rate))
+        #     update_stepsize = tf.assign(self.step_size, new_stepsize)
+        #
+        # with tf.control_dependencies([update_stepsize]):
+        update_t = tf.assign(self.t, self.t + 1)
 
         return new_q, p, old_hamiltonian, new_hamiltonian, acceptance_rate, \
-            update_t, update_stepsize
+            update_t#, update_stepsize

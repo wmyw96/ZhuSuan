@@ -55,7 +55,7 @@ def test_hmc():
     n_samples = 10000
     sampler = HMC(step_size=0.1)
     mass = [tf.Variable(tf.ones([]))]
-    sample_step, _, _, _, _, _, _ = sampler.sample(log_posterior, [x], mass)
+    sample_step, _, _, _, _, _ = sampler.sample(log_posterior, [x], mass)
 
     with tf.Session() as sess:
         sess.run(tf.initialize_all_variables())
