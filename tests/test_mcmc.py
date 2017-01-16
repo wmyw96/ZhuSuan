@@ -47,15 +47,17 @@ def test_nuts():
 
 
 def test_hmc():
-    x = tf.Variable(tf.zeros([]))
+    x = tf.zeros([])
 
-    def log_posterior(x):
-        return -0.5 * tf.square(x[0])
+    def log_posterior(latent, observed=None, given=None):
+        x = latent['x']
+        return -0.5 * tf.square(x)
 
     n_samples = 10000
     sampler = HMC(step_size=0.1)
-    mass = [tf.Variable(tf.ones([]))]
-    sample_step, _, _, _, _, _ = sampler.sample(log_posterior, [x], mass)
+    mass = [tf.ones([])]
+    sample_step, _, _, _, _, _ = sampler.sample(
+        log_posterior, None, {'x': x}, 0, mass=mass)
 
     with tf.Session() as sess:
         sess.run(tf.initialize_all_variables())

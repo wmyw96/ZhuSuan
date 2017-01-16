@@ -21,24 +21,33 @@ def velocity(momentum, mass):
     return map(lambda (x, y): x / y, zip(momentum, mass))
 
 
-def hamiltonian(q, p, log_posterior, mass):
+def hamiltonian(q, p, log_posterior, mass, axis):
+    # (n_particles, n)
     potential = -log_posterior(q)
-    kinetic = 0.5 * tf.add_n([tf.reduce_sum(tf.square(momentum) / m)
+    # (n_particles, n)
+    kinetic = 0.5 * tf.add_n([tf.reduce_sum(tf.square(momentum) / m, axis)
                               for momentum, m in zip(p, mass)])
+    # (n_particles, n)
     return potential + kinetic
 
 
 def leapfrog_integrator(q, p, step_size1, step_size2, grad, mass):
+    # [(n_particles, n, n_z)]
     q = [x + step_size1 * y for x, y in zip(q, velocity(p, mass))]
     # p = p + epsilon / 2 * gradient q
+    # [(n_particles, n, n_z)]
     grads = grad(q)
+    # [(n_particles, n, n_z)]
     p = [x + step_size2 * y for x, y in zip(p, grads)]
     return q, p
 
 
-def get_acceptance_rate(q, p, new_q, new_p, log_posterior, mass):
-    old_hamiltonian = hamiltonian(q, p, log_posterior, mass)
-    new_hamiltonian = hamiltonian(new_q, new_p, log_posterior, mass)
+def get_acceptance_rate(q, p, new_q, new_p, log_posterior, mass, axis):
+    # (n_particles, n)
+    old_hamiltonian = hamiltonian(q, p, log_posterior, mass, axis)
+    # (n_particles, n)
+    new_hamiltonian = hamiltonian(new_q, new_p, log_posterior, mass, axis)
+    # (n_particles, n)
     return old_hamiltonian, new_hamiltonian, \
         tf.exp(tf.minimum(-new_hamiltonian + old_hamiltonian, 0.0))
 
@@ -152,22 +161,26 @@ class HMC:
             self.target_acceptance_rate = tf.convert_to_tensor(
                 target_acceptance_rate, name="target_acceptance_rate")
             self.t = tf.Variable(0, name="t")
-            self.step_size_tuner = StepsizeTuner(
-                m_adapt=m_adapt, gamma=gamma, t0=t0, kappa=kappa,
-                delta=target_acceptance_rate)
-
-            self.m_adapt = tf.convert_to_tensor(m_adapt, name="m_adapt")
-            self.init_buffer = tf.convert_to_tensor(int(m_adapt * 0.2),
-                                                    name="init_buffer")
-            self.term_buffer = tf.convert_to_tensor(int(m_adapt * 0.5),
-                                                    name="term_buffer")
-            self.base_window = m_adapt - self.init_buffer - self.term_buffer
-            self.next_window = self.init_buffer + self.base_window
+            # self.step_size_tuner = StepsizeTuner(
+            #     m_adapt=m_adapt, gamma=gamma, t0=t0, kappa=kappa,
+            #     delta=target_acceptance_rate)
+            #
+            # self.m_adapt = tf.convert_to_tensor(m_adapt, name="m_adapt")
+            # self.init_buffer = tf.convert_to_tensor(int(m_adapt * 0.2),
+            #                                         name="init_buffer")
+            # self.term_buffer = tf.convert_to_tensor(int(m_adapt * 0.5),
+            #                                         name="term_buffer")
+            # self.base_window = m_adapt - self.init_buffer - self.term_buffer
+            # self.next_window = self.init_buffer + self.base_window
 
     @add_name_scope
-    def sample(self, log_posterior, var_list=None, mass=None):
-        self.q = copy(var_list)
-        self.shapes = [x.initialized_value().get_shape() for x in self.q]
+    def sample(self, log_posterior, observed, latent, axis,
+               mass=None, given=None):
+        # latent_v: [(n_particles, n, n_z)]
+        latent_k, latent_v = [list(i) for i in zip(*six.iteritems(latent))]
+        # [(n_particles, n, n_z)]
+        self.q = copy(latent_v)
+        self.shapes = [x.get_shape() for x in self.q]
         # variance_estimator = VarianceEstimator(self.shapes)
         #
         # # Estimate covariance
@@ -190,64 +203,73 @@ class HMC:
         #                            lambda: mass)
         #     if len(self.shapes) == 1:
         #         current_mass = [current_mass]
+
+        # [(n_particles, n, n_z)]
         current_mass = mass
 
+        # [(n_particles, n, n_z)]
         p = random_momentum(current_mass)
 
         def get_gradient(var_list):
-            log_p = log_posterior(var_list)
-            grads = tf.gradients(log_p, var_list)
-            return log_p, grads
+            # (n_particles, n)
+            log_p = log_posterior(dict(zip(latent_k, var_list)),
+                                  observed, given)
+            # (n_particles, n, n_z)
+            latent_grads = tf.gradients(log_p, var_list)
+            return log_p, latent_grads
 
-        # Initialize step size
-        def init_step_size():
-            factor = 1.1
-
-            def loop_cond(step_size, last_acceptance_rate, cond):
-                return cond
-
-            def loop_body(step_size, last_acceptance_rate, cond):
-                # Calculate acceptance_rate
-                new_q, new_p = leapfrog_integrator(
-                    self.q, p, tf.constant(0.0), step_size / 2,
-                    lambda var_list: get_gradient(var_list)[1], current_mass)
-                new_q, new_p = leapfrog_integrator(
-                    new_q, new_p, step_size, step_size / 2,
-                    lambda var_list: get_gradient(var_list)[1], current_mass)
-                _, _, acceptance_rate = get_acceptance_rate(
-                    self.q, p, new_q, new_p, log_posterior, current_mass)
-
-                # Change step size and stopping criteria
-                new_step_size = tf.cond(
-                    tf.less(acceptance_rate, self.target_acceptance_rate),
-                    lambda: step_size * (1.0 / factor),
-                    lambda: step_size * factor)
-
-                cond = tf.logical_not(tf.logical_xor(
-                    tf.less(last_acceptance_rate, self.target_acceptance_rate),
-                    tf.less(acceptance_rate, self.target_acceptance_rate)))
-
-                # return [tf.Print(new_step_size,
-                #                  [new_step_size, acceptance_rate]),
-                #         acceptance_rate, cond]
-                return [new_step_size, acceptance_rate, cond]
-
-            init_step_size_, new_acceptance_rate, _ = tf.while_loop(
-                loop_cond,
-                loop_body,
-                [self.step_size, tf.constant(1.0), tf.constant(True)]
-            )
-            # init_step_size_ = tf.Print(init_step_size_, [init_step_size_, new_acceptance_rate])
-            return tf.assign(self.step_size, init_step_size_)
-
-        new_step_size = tf.cond(
-            tf.logical_or(tf.equal(self.t, 0),
-                          tf.equal(self.t, self.next_window)),
-            init_step_size,
-            lambda: self.step_size)
+        # # Initialize step size
+        # def init_step_size():
+        #     factor = 1.1
+        #
+        #     def loop_cond(step_size, last_acceptance_rate, cond):
+        #         return cond
+        #
+        #     def loop_body(step_size, last_acceptance_rate, cond):
+        #         # Calculate acceptance_rate
+        #         new_q, new_p = leapfrog_integrator(
+        #             self.q, p, tf.constant(0.0), step_size / 2,
+        #             lambda var_list: get_gradient(var_list)[1], current_mass)
+        #         new_q, new_p = leapfrog_integrator(
+        #             new_q, new_p, step_size, step_size / 2,
+        #             lambda var_list: get_gradient(var_list)[1], current_mass)
+        #         _, _, acceptance_rate = get_acceptance_rate(
+        #             self.q, p, new_q, new_p, log_posterior, current_mass)
+        #
+        #         # Change step size and stopping criteria
+        #         new_step_size = tf.cond(
+        #             tf.less(acceptance_rate, self.target_acceptance_rate),
+        #             lambda: step_size * (1.0 / factor),
+        #             lambda: step_size * factor)
+        #
+        #         cond = tf.logical_not(tf.logical_xor(
+        #             tf.less(last_acceptance_rate, self.target_acceptance_rate),
+        #             tf.less(acceptance_rate, self.target_acceptance_rate)))
+        #
+        #         # return [tf.Print(new_step_size,
+        #         #                  [new_step_size, acceptance_rate]),
+        #         #         acceptance_rate, cond]
+        #         return [new_step_size, acceptance_rate, cond]
+        #
+        #     init_step_size_, new_acceptance_rate, _ = tf.while_loop(
+        #         loop_cond,
+        #         loop_body,
+        #         [self.step_size, tf.constant(1.0), tf.constant(True)]
+        #     )
+        #     # init_step_size_ = tf.Print(init_step_size_, [init_step_size_, new_acceptance_rate])
+        #     return tf.assign(self.step_size, init_step_size_)
+        #
+        # new_step_size = tf.cond(
+        #     tf.logical_or(tf.equal(self.t, 0),
+        #                   tf.equal(self.t, self.next_window)),
+        #     init_step_size,
+        #     lambda: self.step_size)
+        new_step_size = self.step_size
 
         # Leapfrog
+        # [(n_particles, n, n_z)]
         current_p = p
+        # [(n_particles, n, n_z)]
         current_q = copy(self.q)
 
         def loop_cond(i, current_q, current_p):
@@ -263,6 +285,7 @@ class HMC:
                                  lambda: new_step_size,
                                  lambda: new_step_size / 2)
 
+            # [(n_particles, n, n_z)], [(n_particles, n, n_z)]
             current_q, current_p = leapfrog_integrator(
                 current_q,
                 current_p,
@@ -274,6 +297,7 @@ class HMC:
             return [i + 1, current_q, current_p]
 
         i = tf.constant(0)
+        # [(n_particles, n, n_z)], [(n_particles, n, n_z)]
         _, current_q, current_p = tf.while_loop(loop_cond,
                                                 loop_body,
                                                 [i, current_q, current_p],
@@ -281,20 +305,31 @@ class HMC:
                                                 parallel_iterations=1)
 
         # Hamiltonian
+        log_posterior_ = lambda q: log_posterior(dict(zip(latent_k, q)),
+                                                 observed, given)
+        # (n_particles, n)
         old_hamiltonian, new_hamiltonian, acceptance_rate = \
             get_acceptance_rate(self.q, p, current_q, current_p,
-                                log_posterior, current_mass)
-        u01 = tf.random_uniform(shape=[])
+                                log_posterior_, current_mass, axis)
+        # (n_particles, n)
+        u01 = tf.random_uniform(shape=tf.shape(acceptance_rate))
 
-        new_q = tf.cond(u01 < acceptance_rate,
-                        lambda: [x.assign(y)
-                                 for x, y in zip(self.q, current_q)],
-                        lambda: self.q)
+        # (n_particles, n)
+        print(u01.get_shape().as_list())
+        print(current_q[0].get_shape().as_list())
+        print(self.q[0].get_shape().as_list())
+        def accept(k, v):
+            tile_arr = [1] * len(v.get_shape())
+            tile_arr[-1] = tf.shape(v)[-1]
+            accept = tf.tile(tf.expand_dims(u01 < acceptance_rate, -1),
+                             tile_arr)
+            return tf.select(accept, k, v)
+        new_q = [accept(k, v) for k, v in zip(current_q, self.q)]
 
-        # This is because tf.cond returns a single Tensor if the branch
-        # function returns a list of a single Tensor.
-        if len(self.q) == 1:
-            new_q = [new_q]
+        # # This is because tf.cond returns a single Tensor if the branch
+        # # function returns a list of a single Tensor.
+        # if len(self.q) == 1:
+        #     new_q = [new_q]
 
         # Tune step size
         # with tf.control_dependencies([acceptance_rate]):
