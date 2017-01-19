@@ -49,6 +49,8 @@ def test_nuts():
 def test_hmc():
     x = tf.zeros([])
 
+
+
     def log_posterior(latent, observed=None, given=None):
         x = latent['x']
         return -0.5 * tf.square(x)

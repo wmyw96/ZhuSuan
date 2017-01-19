@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 
 import tensorflow as tf
+import numpy as np
 from zhusuan.mcmc.hmc import HMC
-#from matplotlib import pyplot as plt
+from matplotlib import pyplot as plt
 import scipy
 import scipy.stats
 
+
+kernel_width = 0.2
+num_samples = 1000
 
 tf.set_random_seed(0)
 
@@ -31,7 +35,17 @@ for i in range(10):
     #samples.append(sample)
     #print sample, p, new_hamiltonian, old_hamiltonian
 
-#plt.hist(samples, bins=30)
-#plt.show()
+#samples = list(np.random.randn(num_samples))
+xs = np.linspace(-5, 5, 1000)
+ys = np.zeros((1000))
+for mu in samples:
+    ys += scipy.stats.norm.pdf(xs, loc=mu, scale=kernel_width)
+ys /= len(samples)
 
-#print(scipy.stats.normaltest(samples))
+f, ax = plt.subplots()
+ax.plot(xs, ys)
+ax.plot(xs, scipy.stats.norm.pdf(xs))
+#ax.hist(samples, bins=30)
+
+print(scipy.stats.normaltest(samples))
+plt.show()

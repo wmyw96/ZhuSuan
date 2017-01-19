@@ -28,7 +28,8 @@ def hamiltonian(q, p, log_posterior, mass, axis):
     kinetic = 0.5 * tf.add_n([tf.reduce_sum(tf.square(momentum) / m, axis)
                               for momentum, m in zip(p, mass)])
     # (n_particles, n)
-    return potential + kinetic
+#return potential + kinetic
+    return kinetic
 
 
 def leapfrog_integrator(q, p, step_size1, step_size2, grad, mass):
@@ -49,7 +50,7 @@ def get_acceptance_rate(q, p, new_q, new_p, log_posterior, mass, axis):
     new_hamiltonian = hamiltonian(new_q, new_p, log_posterior, mass, axis)
     # (n_particles, n)
     return old_hamiltonian, new_hamiltonian, \
-        tf.exp(tf.minimum(-new_hamiltonian + old_hamiltonian, 0.0))
+            tf.exp(tf.minimum(-new_hamiltonian + old_hamiltonian, 0.0))
 
 
 class StepsizeTuner:
@@ -344,5 +345,6 @@ class HMC:
         # with tf.control_dependencies([update_stepsize]):
         update_t = tf.assign(self.t, self.t + 1)
 
+        return 0
         return new_q, p, old_hamiltonian, new_hamiltonian, acceptance_rate, \
             update_t#, update_stepsize
