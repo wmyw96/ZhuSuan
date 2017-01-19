@@ -29,7 +29,7 @@ def hamiltonian(q, p, log_posterior, mass, data_axis):
     kinetic = 0.5 * tf.add_n([tf.reduce_sum(tf.square(momentum) / m, axis, keep_dims=True)
                           for momentum, m, axis in zip(p, mass, data_axis)])
     # (n_particles, n)
-    return tf.reshape(potential, tf.shape(kinetic)) + kinetic
+    return tf.reshape(potential, tf.shape(kinetic)) + kinetic, -potential
 #return tf.reshape(potential, tf.shape(kinetic)) + tf.Print(kinetic, [q, p, potential, kinetic])
 
 
@@ -46,11 +46,11 @@ def leapfrog_integrator(q, p, step_size1, step_size2, grad, mass):
 
 def get_acceptance_rate(q, p, new_q, new_p, log_posterior, mass, data_axis):
     # (n_particles, n)
-    old_hamiltonian = hamiltonian(q, p, log_posterior, mass, data_axis)
+    old_hamiltonian, _ = hamiltonian(q, p, log_posterior, mass, data_axis)
     # (n_particles, n)
-    new_hamiltonian = hamiltonian(new_q, new_p, log_posterior, mass, data_axis)
+    new_hamiltonian, new_log_prob = hamiltonian(new_q, new_p, log_posterior, mass, data_axis)
     # (n_particles, n)
-    return old_hamiltonian, new_hamiltonian, \
+    return old_hamiltonian, new_hamiltonian, new_log_prob, \
         tf.exp(tf.minimum(-new_hamiltonian + old_hamiltonian, 0.0))
 
 
@@ -155,9 +155,10 @@ class HMC:
 #current_p = [tf.Print(current_p[0], [current_p[0]], "cp")]
 
         # (n_particles, n)
-        old_hamiltonian, new_hamiltonian, acceptance_rate = \
+        old_hamiltonian, new_hamiltonian, new_log_prob, acceptance_rate = \
             get_acceptance_rate(self.q, p, current_q, current_p,
                                 get_log_posterior, current_mass, self.data_axis)
+
         # (n_particles, n)
         u01 = tf.random_uniform(shape=tf.shape(acceptance_rate))
         if_accept = tf.to_float(u01 < acceptance_rate)
@@ -169,4 +170,5 @@ class HMC:
         update_q = [old.assign(new) for old, new in zip(latent_v, new_q)]
 #current_p = [tf.Print(current_p[0], [current_p[0]], "cp2")]
 
-        return update_q, p, old_hamiltonian, new_hamiltonian, acceptance_rate
+        return update_q, p, tf.squeeze(old_hamiltonian), tf.squeeze(new_hamiltonian), \
+               new_log_prob, tf.squeeze(acceptance_rate)
