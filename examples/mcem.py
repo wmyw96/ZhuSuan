@@ -212,6 +212,7 @@ if __name__ == "__main__":
         x_batch = np.random.binomial(
             n=1, p=x_batch, size=x_batch.shape).astype('float32')
 
+        # While loop version: fail
         def loop_cond(i, z):
             return i < 5
 
@@ -222,6 +223,14 @@ if __name__ == "__main__":
 
         i = tf.constant(0)
         _, new_z = tf.while_loop(loop_cond, loop_body, [i, z_train])
+
+        # Plane version: works
+        # new_z = z_train
+        # for i in range(5):
+        #     lj = model.log_prob2({'z': new_z}, {'x': x}, None)
+        #     dz = tf.gradients(lj, new_z)[0]
+        #     new_z = new_z + 1e-5 * dz
+
         print(sess.run(new_z, feed_dict={x: x_batch, is_training: True, n_particles: 1}))
 
 #        print(lj.get_shape())
