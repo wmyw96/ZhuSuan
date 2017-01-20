@@ -52,7 +52,7 @@ train_writer.close()
 samples = []
 print('Sampling...')
 for i in range(num_samples):
-    q, p, oh, nh, ar = sess.run(sampler)
+    q, p, oh, nh, ll, ar = sess.run(sampler)
     #print(q, p, oh, nh, ar)
     if isinstance(q[0], np.ndarray):
         samples.extend(list(q[0]))
