@@ -48,6 +48,7 @@ def get_acceptance_rate(q, p, new_q, new_p, log_posterior, mass, data_axis):
     # (n_particles, n)
     old_hamiltonian, _ = hamiltonian(q, p, log_posterior, mass, data_axis)
     # (n_particles, n)
+#TODO
     new_hamiltonian, new_log_prob = hamiltonian(new_q, new_p, log_posterior, mass, data_axis)
     # (n_particles, n)
     return old_hamiltonian, new_hamiltonian, new_log_prob, \
@@ -57,7 +58,7 @@ def get_acceptance_rate(q, p, new_q, new_p, log_posterior, mass, data_axis):
 class HMC:
     def __init__(self, step_size=1, n_leapfrogs=10):
         with tf.name_scope("HMC"):
-            self.step_size = tf.Variable(step_size, name="step_size")
+            self.step_size = tf.Variable(step_size, name="step_size", trainable=False)
             self.n_leapfrogs = tf.convert_to_tensor(n_leapfrogs,
                                                     name="n_leapfrogs")
 
@@ -104,6 +105,7 @@ class HMC:
 
             # (chain_axis data_axis)
             latent_grads = tf.gradients(log_p, var_list)
+            print('LG = {}'.format(latent_grads))
             return latent_grads
 
         current_p = copy(p)

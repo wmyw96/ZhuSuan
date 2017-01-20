@@ -18,7 +18,7 @@ try:
     from zhusuan.model import *
     from zhusuan.variational import advi
     from zhusuan.evaluation import is_loglikelihood
-    from zhusuan.mcmc.hmc import HMC
+    from zhusuan.mcmc.hmc2 import HMC
 except:
     raise ImportError()
 
@@ -92,6 +92,24 @@ class M1:
         # (n_particles, n)
         return log_px_z + log_pz
 
+    def log_prob2(self, latent, observed, given):
+        """
+        z: (n, n_z)
+        x: (n, n_z) 
+        return: (n)
+        """
+        x = tf.expand_dims(observed['x'], 0)
+        z = tf.expand_dims(latent['z'], 0)
+#        print('Self X shape={}, Self Z shape={}'.format(
+#                    self.x.value.get_shape(), self.z.value.get_shape()))
+#        print('X shape={}, Z shape={}'.format(x.get_shape(), z.get_shape()))
+        z_out, x_out = self.model.get_output([self.z, self.x],
+               inputs={self.z: z, self.x: x})
+
+        return tf.squeeze(tf.reduce_sum(x_out[1], -1)) + \
+           tf.squeeze(tf.reduce_sum(z_out[1], -1))
+        # return tf.squeeze(tf.reduce_sum(tf.square(x), -1)) + tf.squeeze(tf.reduce_sum(tf.square(z), -1))
+
 
 def q_net(x, n_z, n_particles, is_training):
     """
@@ -139,10 +157,12 @@ if __name__ == "__main__":
     n_z = 40
 
     # Define training/evaluation parameters
-    n_chains = 1
+#n_chains = 1
+    mcmc_iters = 5
+    n_leapfrogs = 1
     ll_samples = 5000
     epoches = 3000
-    batch_size = 1
+    batch_size = 10
     test_batch_size = 100
     iters = x_train.shape[0] // batch_size
     test_iters = x_test.shape[0] // test_batch_size
@@ -162,34 +182,17 @@ if __name__ == "__main__":
     var_list = tf.trainable_variables()
 
     # HMC
-    sampler = HMC(step_size=0.1, n_leapfrogs=1, target_acceptance_rate=0.8)
-    mass = [tf.ones([n_particles, n, n_z])]
-    z = tf.zeros([n_particles, n, n_z])
-    # (n_particles, n, n_z)
-    z_samples = sampler.sample(
-        model.log_prob, {'x': x}, {'z': z}, axis=2, mass=mass)[0][0]
-    z_samples = tf.stop_gradient(z_samples)
+    z_train = tf.Variable(tf.zeros([batch_size, n_z]), trainable=False)
+    reset_z_train = tf.assign(z_train, tf.zeros([batch_size, n_z]))
+    z_train_input = tf.placeholder(tf.float32, shape=[mcmc_iters, batch_size, n_z])
+    train_hmc = HMC(step_size=1e-4, n_leapfrogs=n_leapfrogs)
+    train_sampler = train_hmc.sample(model.log_prob2, 
+            {'x': x}, {'z': z_train}, chain_axis=0)
 
     # Build updates
     # (n_particles, n)
-    log_joint = model.log_prob({'z': z_samples}, {'x': x}, None)
+    log_joint = model.log_prob({'z': z_train_input}, {'x': x}, None)
     log_joint = tf.reduce_mean(log_joint)
-
-    # Build the computation graph
-    # is_training = tf.placeholder(tf.bool, shape=[], name='is_training')
-    # learning_rate_ph = tf.placeholder(tf.float32, shape=[], name='lr')
-    # n_particles = tf.placeholder(tf.int32, shape=[], name='n_particles')
-    # x = tf.placeholder(tf.float32, shape=(None, n_x), name='x')
-    # n = tf.shape(x)[0]
-    # optimizer = tf.train.AdamOptimizer(learning_rate_ph, epsilon=1e-4)
-    # model = M1(n_z, n_x, n, n_particles, is_training)
-    # variational, lz = q_net(x, n_z, n_particles, is_training)
-    # z, z_logpdf = variational.get_output(lz)
-    # z_logpdf = tf.reduce_sum(z_logpdf, -1)
-    # lower_bound = tf.reduce_mean(advi(
-    #     model, {'x': x}, {'z': [z, z_logpdf]}, reduction_indices=0))
-    # log_likelihood = tf.reduce_mean(is_loglikelihood(
-    #     model, {'x': x}, {'z': [z, z_logpdf]}, reduction_indices=0))
 
     grads = optimizer.compute_gradients(-log_joint, var_list=var_list)
     infer = optimizer.apply_gradients(grads)
@@ -205,6 +208,28 @@ if __name__ == "__main__":
     # Run the inference
     with tf.Session() as sess:
         sess.run(tf.initialize_all_variables())
+        x_batch = x_train[:batch_size]
+        x_batch = np.random.binomial(
+            n=1, p=x_batch, size=x_batch.shape).astype('float32')
+
+        def loop_cond(i, z):
+            return i < 5
+
+        def loop_body(i, z):
+            lj = model.log_prob2({'z': z}, {'x': x}, None)
+            dz = tf.gradients(lj, z)[0]
+            return [tf.Print(i, [i]) + 1, z + 1e-5 * dz]
+
+        i = tf.constant(0)
+        _, new_z = tf.while_loop(loop_cond, loop_body, [i, z_train])
+        print(sess.run(new_z, feed_dict={x: x_batch, is_training: True, n_particles: 1}))
+
+#        print(lj.get_shape())
+#        print(z_train.get_shape())
+#        print(dz.get_shape())
+#        print(sess.run(dz,
+#                feed_dict={x: x_batch, is_training: True, n_particles: 1}))
+
         for epoch in range(1, epoches + 1):
             time_epoch = -time.time()
             if epoch % anneal_lr_freq == 0:
@@ -215,8 +240,23 @@ if __name__ == "__main__":
                 x_batch = x_train[t * batch_size:(t + 1) * batch_size]
                 x_batch = np.random.binomial(
                     n=1, p=x_batch, size=x_batch.shape).astype('float32')
+
+                # Get samples
+                samples = []
+                sess.run(reset_z_train)
+                print('Reset z')
+                for s in range(mcmc_iters):
+                    sample, _, _, _, lp, _ = sess.run(train_sampler,
+                            feed_dict={x: x_batch,
+                                       is_training: True,
+                                       n_particles: 1})
+                    samples.append(sample)
+                    print(lp)
+
+                samples = np.array(samples)
                 _, lb = sess.run([infer, log_joint],
                                  feed_dict={x: x_batch,
+                                            z_train_input: samples,
                                             learning_rate_ph: learning_rate,
                                             n_particles: n_chains,
                                             is_training: True})
@@ -225,17 +265,18 @@ if __name__ == "__main__":
             time_epoch += time.time()
             print('Epoch {} ({:.1f}s): Log joint = {}'.format(
                 epoch, time_epoch, np.mean(lbs)))
-            if epoch % test_freq == 0:
-                time_test = -time.time()
-                test_lbs = []
-                for t in range(test_iters):
-                    test_x_batch = x_test[
-                        t * test_batch_size: (t + 1) * test_batch_size]
-                    test_lb = sess.run(log_joint,
-                                       feed_dict={x: test_x_batch,
-                                                  n_particles: n_chains,
-                                                  is_training: False})
-                    test_lbs.append(test_lb)
-                time_test += time.time()
-                print('>>> TEST ({:.1f}s)'.format(time_test))
-                print('>> Test log likelihood = {}'.format(np.mean(test_lbs)))
+
+#            if epoch % test_freq == 0:
+#                time_test = -time.time()
+#                test_lbs = []
+#                for t in range(test_iters):
+#                    test_x_batch = x_test[
+#                        t * test_batch_size: (t + 1) * test_batch_size]
+#                    test_lb = sess.run(log_joint,
+#                                       feed_dict={x: test_x_batch,
+#                                                  n_particles: n_chains,
+#                                                  is_training: False})
+#                    test_lbs.append(test_lb)
+#                time_test += time.time()
+#                print('>>> TEST ({:.1f}s)'.format(time_test))
+#                print('>> Test log likelihood = {}'.format(np.mean(test_lbs)))
