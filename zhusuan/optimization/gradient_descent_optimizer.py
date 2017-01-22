@@ -96,7 +96,11 @@ class GradientDescentOptimizer:
                      RuntimeError('Objective is nan, consider specifing '
                                   'initializing value.'))
 
-            t = self.c * np.linalg.norm(g) ** 2
+            g_ = []
+            for arr in g:
+              g_ = np.append(g_, arr.flatten('F'))
+
+            t = self.c * np.linalg.norm(g_) ** 2
 
             # Perform line search
             while True:
