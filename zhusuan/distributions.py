@@ -95,9 +95,9 @@ class Normal:
                 sample_dim, 0, message="Only support non-negative sample_dim")
             with tf.control_dependencies([_assert_positive_dim]):
                 sample_dim = tf.identity(sample_dim)
-            shape = tf.concat_v2([base_shape[:sample_dim],
-                                  tf.stack([n_samples]),
-                                  base_shape[sample_dim:]], 0)
+            shape = tf.concat([base_shape[:sample_dim],
+                               tf.stack([n_samples]),
+                               base_shape[sample_dim:]], 0)
             if static_sample_dim is not None:
                 static_shape = static_base_shape[:static_sample_dim] + \
                     [static_n_samples] + static_base_shape[static_sample_dim:]
@@ -178,7 +178,8 @@ class Logistic:
             logstd=0.,
             sample_dim=None,
             n_samples=1,
-            reparameterized=False):
+            reparameterized=False,
+            check_numerics=True):
         raise NotImplementedError()
 
     @add_name_scope
