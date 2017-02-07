@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-vae_ladder for CIFAR10. Without autoregressive connections.
+vae_ladder for CIFAR10. Without autoregressive connections. Separate p(x|z)
+and q(z|x).
 """
 from __future__ import absolute_import
 from __future__ import print_function
@@ -207,9 +208,9 @@ if __name__ == "__main__":
         'bottle_neck_group',
         ['num_blocks', 'num_filters', 'map_size', 'n_z'])
     groups = [
-        bottle_neck_group(4, 64, 16, 64),
-        bottle_neck_group(4, 64, 8, 64),
-        bottle_neck_group(4, 64, 4, 64)
+        bottle_neck_group(2, 64, 16, 64),
+        bottle_neck_group(2, 64, 8, 64),
+        bottle_neck_group(2, 64, 4, 64)
     ]
 
     # Build the computation graph

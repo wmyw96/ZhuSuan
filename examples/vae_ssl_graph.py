@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
+"""
+SSL with graph based on a pretrained VAE's latent z. q(y) not conditioned on x.
+"""
 from __future__ import absolute_import
 from __future__ import print_function
 from __future__ import division
@@ -11,6 +13,7 @@ import time
 import tensorflow as tf
 from tensorflow.contrib import layers
 from six.moves import range
+from sklearn.neighbors import NearestNeighbors
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,14 +29,28 @@ except:
     raise ImportError()
 
 
+def const_graph(x, k):
+    """
+    To compute l2 distance of each data point pair.
+    :param x: (batch_size, feature_size)
+    :param k: k nearest neighbour
+    :return: indices, distances
+    """
+    nbrs = NearestNeighbors(n_neighbors=k, algorithm='auto').fit(x)
+    distances, indices = nbrs.kneighbors(x)
+    return indices, distances
+
+
 @zs.reuse('model')
 def M2(observed, n, n_x, n_y, n_z, n_particles):
     with zs.StochasticGraph(observed=observed) as model:
         z_mean = tf.zeros([n_particles, n_z])
         z_logstd = tf.zeros([n_particles, n_z])
         z = zs.Normal('z', z_mean, z_logstd, sample_dim=1, n_samples=n)
-        y_logits = tf.zeros([n_particles, n_y])
-        y = zs.Discrete('y', y_logits, sample_dim=1, n_samples=n)
+        y_mean = 0.5 * tf.ones([n_particles, n_y])
+        y_logstd = tf.zeros([n_particles, n_y])
+        y = zs.Normal('y', y_mean, y_logstd, sample_dim=1, n_samples=n)
+
         lx_zy = layers.fully_connected(tf.concat([z, y], 2), 500)
         lx_zy = layers.fully_connected(lx_zy, 500)
         x_logits = layers.fully_connected(lx_zy, n_x, activation_fn=None)
@@ -41,24 +58,52 @@ def M2(observed, n, n_x, n_y, n_z, n_particles):
     return model
 
 
-@zs.reuse('variational')
-def qz_xy(x, y, n_z, n_particles):
+@zs.reuse('qz_xy')
+def qz_xy(x, y, n_z):
+    lz_xy = layers.fully_connected(tf.concat([x, y], -1), 500)
+    lz_xy = layers.fully_connected(lz_xy, 500)
+    z_mean = layers.fully_connected(lz_xy, n_z, activation_fn=None)
+    z_logstd = layers.fully_connected(lz_xy, n_z, activation_fn=None)
+    return z_mean, z_logstd
+
+
+@zs.reuse('qy_x')
+def qy_x(x, n_y):
+    ly_x = layers.fully_connected(x, 500)
+    ly_x = layers.fully_connected(ly_x, 500)
+    y_mean = layers.fully_connected(ly_x, n_y, activation_fn=None)
+    y_logstd = layers.fully_connected(ly_x, n_y, activation_fn=None)
+    return y_mean, y_logstd
+
+
+def labeled_variational(x, y, n_z, n_particles):
     with zs.StochasticGraph() as variational:
-        lz_xy = layers.fully_connected(tf.concat([x, y], 1), 500)
-        lz_xy = layers.fully_connected(lz_xy, 500)
-        lz_mean = layers.fully_connected(lz_xy, n_z, activation_fn=None)
-        lz_logstd = layers.fully_connected(lz_xy, n_z, activation_fn=None)
-        z = zs.Normal('z', lz_mean, lz_logstd, sample_dim=0,
+        z_mean, z_logstd = qz_xy(x, y, n_z)
+        z = zs.Normal('z', z_mean, z_logstd, sample_dim=0,
                       n_samples=n_particles)
     return variational
 
 
-@zs.reuse('classifier')
-def qy_x(x, n_y):
-    ly_x = layers.fully_connected(x, 500)
-    ly_x = layers.fully_connected(ly_x, 500)
-    ly_x = layers.fully_connected(ly_x, n_y, activation_fn=None)
-    return ly_x
+def unlabeled_variational(x, n_y, n_z, n_particles):
+    with zs.StochasticGraph() as variational:
+        y_mean, y_logstd = qy_x(x, n_y)
+        y = zs.Normal('y', y_mean, y_logstd, sample_dim=0,
+                      n_samples=n_particles)
+        x_tiled = tf.tile(tf.expand_dims(x, 0), [n_particles, 1, 1])
+        z_mean, z_logstd = qz_xy(x_tiled, y, n_z)
+        z = zs.Normal('z', z_mean, z_logstd)
+    return variational
+
+
+# @zs.reuse('qy')
+# def qy(n_batch, n_y, n_particles):
+#     with zs.StochasticGraph() as qy:
+#         y_mean = tf.get_variable('qy_mean', [n_batch, n_y], dtype=tf.float32)
+#         y_logstd = tf.get_variable('qy_logstd', [n_batch, n_y],
+#                                    dtype=tf.float32)
+#         y = zs.Normal('y', y_mean, y_logstd, sample_dim=0,
+#                       n_samples=n_particles)
+#     return qy
 
 
 if __name__ == "__main__":
@@ -78,7 +123,7 @@ if __name__ == "__main__":
     n_z = 100
 
     # Define training/evaluation parameters
-    lb_samples = 10
+    ll_samples = 10
     beta = 1200.
     epoches = 3000
     batch_size = 100
@@ -99,66 +144,54 @@ if __name__ == "__main__":
     optimizer = tf.train.AdamOptimizer(learning_rate_ph)
 
     def log_joint(latent, observed, given):
-        # z: (n_samples, batch_size, n_z)
+        # z: (n_particles, batch_size, n_z)
+        # y: (n_particles, batch_size, n_y), x: (batch_size, n_x)
         z = latent['z']
-        # y: (batch_size, n_y), x: (batch_size, n_x)
-        y, x = observed['y'], observed['x']
-        y = tf.tile(tf.expand_dims(y, 0), [n_particles, 1, 1])
+        x = observed['x']
+        y = observed['y'] if 'y' in observed else latent['y']
         x = tf.tile(tf.expand_dims(x, 0), [n_particles, 1, 1])
         model = M2({'x': x, 'y': y, 'z': z}, tf.shape(x)[0], n_x, n_y, n_z,
                    n_particles)
-        log_px_zy, log_pz, log_py = model.local_log_prob(['x', 'z', 'y'])
+        log_px_zy, log_py, log_pz = model.local_log_prob(['x', 'y', 'z'])
         return tf.reduce_sum(log_px_zy, -1) + tf.reduce_sum(log_pz, -1) + \
-            log_py
+            tf.reduce_sum(log_py, -1)
 
     # Labeled
-    x_labeled_ph = tf.placeholder(tf.float32, shape=[None, n_x], name='x_l')
-    y_labeled_ph = tf.placeholder(tf.float32, shape=[None, n_y], name='y_l')
-    variational = qz_xy(x_labeled_ph, y_labeled_ph, n_z, n_particles)
-    qz_samples, log_qz = variational.query('z', outputs=True,
-                                           local_log_prob=True)
+    x_labeled_ph = tf.placeholder(tf.float32, shape=(None, n_x), name='x_l')
+    y_labeled_ph = tf.placeholder(tf.float32, shape=(None, n_y), name='y_l')
+    y_l = tf.tile(tf.expand_dims(y_labeled_ph, 0), [n_particles, 1, 1])
+    variational = labeled_variational(x_labeled_ph, y_labeled_ph, n_z, n_particles)
+    qz_samples, log_qz = variational.query('z', outputs=True, local_log_prob=True)
     log_qz = tf.reduce_sum(log_qz, -1)
     labeled_lower_bound = tf.reduce_mean(
-        zs.advi(log_joint, {'x': x_labeled_ph, 'y': y_labeled_ph},
+        zs.advi(log_joint, {'x': x_labeled_ph, 'y': y_l},
                 {'z': [qz_samples, log_qz]}, reduction_indices=0))
 
     # Unlabeled
-    x_unlabeled_ph = tf.placeholder(tf.float32, shape=[None, n_x], name='x_u')
+    x_unlabeled_ph = tf.placeholder(tf.float32, shape=(None, n_x), name='x_u')
     n = tf.shape(x_unlabeled_ph)[0]
-    y = tf.diag(tf.ones(n_y))
-    y_u = tf.reshape(tf.tile(tf.expand_dims(y, 0), [n, 1, 1]),
-                     [-1, n_y])
-    x_u = tf.reshape(tf.tile(tf.expand_dims(x_unlabeled_ph, 1), [1, n_y, 1]),
-                     [-1, n_x])
-    variational = qz_xy(x_u, y_u, n_z, n_particles)
-    qz_samples, log_qz = variational.query('z', outputs=True,
-                                           local_log_prob=True)
+    variational = unlabeled_variational(x_unlabeled_ph, n_y, n_z, n_particles)
+    qy_samples, log_qy = variational.query('y', outputs=True, local_log_prob=True)
+    qz_samples, log_qz = variational.query('z', outputs=True, local_log_prob=True)
     log_qz = tf.reduce_sum(log_qz, -1)
-    lb_z = zs.advi(log_joint, {'x': x_u, 'y': y_u},
-                   {'z': [qz_samples, log_qz]}, reduction_indices=0)
-    # sum over y
-    lb_z = tf.reshape(lb_z, [-1, n_y])
-    qy_logits_u = qy_x(x_unlabeled_ph, n_y)
-    qy_u = tf.reshape(tf.nn.softmax(qy_logits_u), [-1, n_y])
-    qy_u += 1e-8
-    qy_u /= tf.reduce_sum(qy_u, 1, keep_dims=True)
-    log_qy_u = tf.log(qy_u)
+    log_qy = tf.reduce_sum(log_qy, -1)
     unlabeled_lower_bound = tf.reduce_mean(
-        tf.reduce_sum(qy_u * (lb_z - log_qy_u), 1))
+        zs.advi(log_joint, {'x': x_unlabeled_ph},
+                {'y': [qy_samples, log_qy], 'z': [qz_samples, log_qz]},
+                reduction_indices=0))
 
     # Build classifier
-    qy_logits_l = qy_x(x_labeled_ph, n_y)
-    qy_l = tf.nn.softmax(qy_logits_l)
+    qy_mean, qy_logstd = qy_x(x_labeled_ph, n_y)
+    qy_l = tf.exp(-tf.square(1.0 - qy_mean)/(2.0*tf.exp(2.0*qy_logstd)))/tf.exp(qy_logstd)
     pred_y = tf.argmax(qy_l, 1)
     acc = tf.reduce_sum(
         tf.cast(tf.equal(pred_y, tf.argmax(y_labeled_ph, 1)), tf.float32) /
         tf.cast(n, tf.float32))
-    log_qy_x = zs.discrete.logpmf(y_labeled_ph, qy_logits_l)
+    log_qy_x = zs.norm.logpdf(y_labeled_ph, qy_mean, qy_logstd)
     classifier_cost = -beta * tf.reduce_mean(log_qy_x)
 
     # Gather gradients
-    cost = -(labeled_lower_bound + unlabeled_lower_bound -
-             classifier_cost) / 2.
+    cost = -(labeled_lower_bound + unlabeled_lower_bound - classifier_cost) / 2.
     grads = optimizer.compute_gradients(cost)
     infer = optimizer.apply_gradients(grads)
 
@@ -184,17 +217,20 @@ if __name__ == "__main__":
                 y_labeled_batch = t_labeled[labeled_indices]
                 x_unlabeled_batch = x_unlabeled[t * batch_size:
                                                 (t + 1) * batch_size]
+                x_unlabeled_batch = x_unlabeled[t * batch_size:
+                                                (t + 1) * batch_size]
                 x_labeled_batch_bin = sess.run(
                     x_bin, feed_dict={x_orig: x_labeled_batch})
                 x_unlabeled_batch_bin = sess.run(
                     x_bin, feed_dict={x_orig: x_unlabeled_batch})
                 _, lb_labeled, lb_unlabeled, train_acc = sess.run(
-                    [infer, labeled_lower_bound, unlabeled_lower_bound, acc],
+                    [infer, labeled_lower_bound, unlabeled_lower_bound,
+                     acc],
                     feed_dict={x_labeled_ph: x_labeled_batch_bin,
                                y_labeled_ph: y_labeled_batch,
                                x_unlabeled_ph: x_unlabeled_batch_bin,
                                learning_rate_ph: learning_rate,
-                               n_particles: lb_samples})
+                               n_particles: ll_samples})
                 lbs_labeled.append(lb_labeled)
                 lbs_unlabeled.append(lb_unlabeled)
                 train_accs.append(train_acc)
@@ -214,11 +250,12 @@ if __name__ == "__main__":
                     test_y_batch = t_test[
                         t * test_batch_size: (t + 1) * test_batch_size]
                     test_ll_labeled, test_ll_unlabeled, test_acc = sess.run(
-                        [labeled_lower_bound, unlabeled_lower_bound, acc],
+                        [labeled_lower_bound, unlabeled_lower_bound,
+                         acc],
                         feed_dict={x_labeled_ph: test_x_batch,
                                    y_labeled_ph: test_y_batch,
                                    x_unlabeled_ph: test_x_batch,
-                                   n_particles: lb_samples})
+                                   n_particles: ll_samples})
                     test_lls_labeled.append(test_ll_labeled)
                     test_lls_unlabeled.append(test_ll_unlabeled)
                     test_accs.append(test_acc)

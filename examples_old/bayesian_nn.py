@@ -84,13 +84,13 @@ class BayesianNN():
 
         x = tf.tile(tf.expand_dims(tf.expand_dims(x, 2), 1),
                     [1, tf.shape(w1)[1], 1, 1])
-        x = tf.concat_v2([x, tf.ones((tf.shape(x)[0], tf.shape(x)[1], 1, 1))],
-                         2)
+        x = tf.concat([x, tf.ones((tf.shape(x)[0], tf.shape(x)[1], 1, 1))],
+                      2)
 
         l = tf.matmul(w1, x) / \
             tf.sqrt(tf.cast(tf.shape(x)[2], tf.float32))
-        l = tf.concat_v2([l, tf.ones((tf.shape(l)[0], tf.shape(l)[1], 1, 1))],
-                         2)
+        l = tf.concat([l, tf.ones((tf.shape(l)[0], tf.shape(l)[1], 1, 1))],
+                      2)
         l = tf.nn.relu(l)
 
         y = tf.matmul(w2, l) / \
