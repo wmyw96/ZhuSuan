@@ -22,6 +22,7 @@ class Normal:
     """
     Class of Normal distribution.
     """
+
     def __init__(self):
         pass
 
@@ -169,6 +170,7 @@ class Logistic:
     """
     Class of Logistic distribution.
     """
+
     def __init__(self):
         pass
 
@@ -178,8 +180,7 @@ class Logistic:
             logstd=0.,
             sample_dim=None,
             n_samples=1,
-            reparameterized=False,
-            check_numerics=True):
+            reparameterized=False):
         raise NotImplementedError()
 
     @add_name_scope
@@ -237,6 +238,7 @@ class Bernoulli:
     """
     Class of Bernoulli distribution.
     """
+
     def __init__(self):
         pass
 
@@ -349,6 +351,7 @@ class Discrete:
     """
     Class of discrete distribution.
     """
+
     def __init__(self):
         pass
 
@@ -398,7 +401,7 @@ class Discrete:
             with tf.control_dependencies([_assert_positive_dim]):
                 sample_dim = tf.identity(sample_dim)
             shape = tf.concat([base_shape[:-1],
-                               tf.stack([n_samples, depth])], 0)
+                              tf.stack([n_samples, depth])], 0)
             samples = tf.reshape(samples_flat, shape)
             n_dims = tf.rank(samples)
             dims = tf.range(n_dims)

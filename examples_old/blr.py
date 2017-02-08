@@ -1,15 +1,16 @@
 
 # -*- coding: utf-8 -*-
 
-import tensorflow as tf
-import numpy as np
 import math
 import os
-from dataset import load_uci_german_credits, load_binary_mnist_realval
-from zhusuan.optimization.gradient_descent_optimizer import \
-    GradientDescentOptimizer
+
+import numpy as np
+import tensorflow as tf
+
+from dataset import load_uci_german_credits
 from zhusuan.distributions_old import norm, bernoulli
-from zhusuan.mcmc.nuts import NUTS
+from zhusuan.mcmc_old.nuts import NUTS
+from zhusuan.mcmc_old.optimization import GradientDescentOptimizer
 
 float_eps = 1e-30
 
@@ -45,7 +46,7 @@ update_data = tf.assign(x, x_input, validate_shape=False, name='update_data')
 
 # Model
 beta = tf.Variable(np.zeros(n_dims), dtype=tf.float32, name='beta')
-scores = tf.reduce_sum(x * beta, reduction_indices=(1,))
+scores = tf.reduce_sum(x * beta, axis=1)
 logits = tf.nn.sigmoid(scores, name='logits')
 predictions = tf.cast(logits > 0.5, tf.float32)
 n_correct = tf.reduce_sum(predictions * y + (1 - predictions) * (1 - y))

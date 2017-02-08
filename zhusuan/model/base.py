@@ -34,6 +34,7 @@ class StochasticTensor(object):
         distribution.
     :param dtype: The type of the resulting Tensor.
     """
+
     def __init__(self, name, incomings, dtype=None):
         self.name = name
         self.incomings = incomings
@@ -55,8 +56,8 @@ class StochasticTensor(object):
                     self._tensor = tf.convert_to_tensor(
                         self.s_graph.observed[self.name], dtype=self.dtype)
                 except ValueError as e:
-                    raise ValueError("StochasticTensor('{}')'s dtype not "
-                                     "compatible with its observed value. "
+                    raise ValueError("StochasticTensor('{}') not compatible "
+                                     "with its observed value. "
                                      "Error message: {}".format(self.name, e))
             else:
                 self._tensor = self.sample()
@@ -79,6 +80,91 @@ class StochasticTensor(object):
         :return: A Tensor. The log probability density (mass) evaluated.
         """
         raise NotImplementedError()
+
+    # overloading arithmetic operations
+    def __abs__(self):
+        return tf.abs(self)
+
+    def __neg__(self):
+        return tf.negative(self)
+
+    def __pos__(self):
+        return self
+
+    def __add__(self, other):
+        return tf.add(self, other)
+
+    def __radd__(self, other):
+        return tf.add(other, self)
+
+    def __sub__(self, other):
+        return tf.subtract(self, other)
+
+    def __rsub__(self, other):
+        return tf.subtract(other, self)
+
+    def __mul__(self, other):
+        return tf.multiply(self, other)
+
+    def __rmul__(self, other):
+        return tf.multiply(other, self)
+
+    def __truediv__(self, other):
+        return tf.div(self, other)
+
+    __div__ = __truediv__
+
+    def __rtruediv__(self, other):
+        return tf.div(other, self)
+
+    __rdiv__ = __rtruediv__
+
+    def __mod__(self, other):
+        return tf.mod(self, other)
+
+    def __rmod__(self, other):
+        return tf.mod(other, self)
+
+    def __pow__(self, other):
+        return tf.pow(self, other)
+
+    def __rpow__(self, other):
+        return tf.pow(other, self)
+
+    # logical operations
+    def __invert__(self):
+        return tf.logical_not(self)
+
+    def __and__(self, other):
+        return tf.logical_and(self, other)
+
+    def __or__(self, other):
+        return tf.logical_or(self, other)
+
+    def __xor__(self, other):
+        return tf.logical_xor(self, other)
+
+    # boolean operations
+    def __lt__(self, other):
+        return tf.less(self, other)
+
+    def __le__(self, other):
+        return tf.less_equal(self, other)
+
+    def __gt__(self, other):
+        return tf.greater(self, other)
+
+    def __ge__(self, other):
+        return tf.greater_equal(self, other)
+
+    def __eq__(self, other):
+        return tf.equal(self, other)
+
+    def __ne__(self, other):
+        return not self == other
+
+    def __hash__(self):
+        return hash(self.tensor)
 
     @staticmethod
     def _to_tensor(value, dtype=None, name=None, as_ref=False):
@@ -103,6 +189,7 @@ class StochasticGraph(Context):
     :param observed: A dictionary of (string, Tensor) pairs, which maps from
         names of random variables to their observed values.
     """
+
     def __init__(self, observed=None):
         self.observed = observed if observed else {}
         self.stochastic_tensors = OrderedDict()
@@ -173,7 +260,7 @@ class StochasticGraph(Context):
         :param local_log_prob: A bool. Whether to query local log probability
             density (mass) values.
 
-        :return: Tuples of Tensors or a list of tuples of Tensors.
+        :return: Tuple of Tensors or a list of tuples of Tensors.
         """
         ret = []
         if outputs:
@@ -194,8 +281,9 @@ def reuse(scope):
     When a `StochasticGraph` is reused as in a function, this decorator helps
     reuse the `tf.Variable`s in the graph every time the function is called.
 
-    :param scope: A String. The scope name passed to `tf.variable_scope()`.
+    :param scope: A string. The scope name passed to `tf.variable_scope()`.
     """
+
     def reuse_decorator(f):
         @wraps(f)
         def _func(*args, **kwargs):
@@ -208,6 +296,7 @@ def reuse(scope):
                         return f(*args, **kwargs)
                 else:
                     raise
+
         return _func
 
     return reuse_decorator

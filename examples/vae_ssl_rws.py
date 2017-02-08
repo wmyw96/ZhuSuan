@@ -12,12 +12,7 @@ import tensorflow as tf
 from tensorflow.contrib import layers
 from six.moves import range
 import numpy as np
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-try:
-    import zhusuan as zs
-except:
-    raise ImportError()
+import zhusuan as zs
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
@@ -106,50 +101,45 @@ if __name__ == "__main__":
     anneal_lr_rate = 0.75
 
     # Build the computation graph
-    learning_rate_ph = tf.placeholder(tf.float32, shape=[], name='lr')
     n_particles = tf.placeholder(tf.int32, shape=[], name='n_particles')
     x_orig = tf.placeholder(tf.float32, shape=[None, n_x], name='x')
     x_bin = tf.cast(tf.less(tf.random_uniform(tf.shape(x_orig), 0, 1), x_orig),
                     tf.float32)
-    optimizer = tf.train.AdamOptimizer(learning_rate_ph)
 
-    def log_joint(latent, observed, given):
-        # z: (n_particles, batch_size, n_z)
-        # y: (n_particles, batch_size, n_y), x: (batch_size, n_x)
-        z = latent['z']
-        x = observed['x']
-        y = observed['y'] if 'y' in observed else latent['y']
-        x = tf.tile(tf.expand_dims(x, 0), [n_particles, 1, 1])
-        model = M2({'x': x, 'y': y, 'z': z}, tf.shape(x)[0], n_x, n_y, n_z,
-                   n_particles)
+    def log_joint(observed):
+        n = tf.shape(observed['x'])[1]
+        model = M2(observed, n, n_x, n_y, n_z, n_particles)
         log_px_zy, log_py, log_pz = model.local_log_prob(['x', 'y', 'z'])
         return tf.reduce_sum(log_px_zy, -1) + tf.reduce_sum(log_pz, -1) + \
             log_py
 
     # Labeled
     x_labeled_ph = tf.placeholder(tf.float32, shape=(None, n_x), name='x_l')
+    x_labeled_obs = tf.tile(tf.expand_dims(x_labeled_ph, 0),
+                            [n_particles, 1, 1])
     y_labeled_ph = tf.placeholder(tf.float32, shape=(None, n_y), name='y_l')
-    y_l = tf.tile(tf.expand_dims(y_labeled_ph, 0), [n_particles, 1, 1])
+    y_labeled_obs = tf.tile(tf.expand_dims(y_labeled_ph, 0),
+                            [n_particles, 1, 1])
     proposal = labeled_proposal(x_labeled_ph, y_labeled_ph, n_z, n_particles)
     qz_samples, log_qz = proposal.query('z', outputs=True, local_log_prob=True)
     log_qz = tf.reduce_sum(log_qz, -1)
     labeled_cost, labeled_log_likelihood = zs.rws(
-        log_joint, {'x': x_labeled_ph, 'y': y_l},
-        {'z': [qz_samples, log_qz]}, reduction_indices=0)
+        log_joint, {'x': x_labeled_obs, 'y': y_labeled_obs},
+        {'z': [qz_samples, log_qz]}, axis=0)
     labeled_cost = tf.reduce_mean(labeled_cost)
     labeled_log_likelihood = tf.reduce_mean(labeled_log_likelihood)
 
     # Unlabeled
     x_unlabeled_ph = tf.placeholder(tf.float32, shape=(None, n_x), name='x_u')
-    n = tf.shape(x_unlabeled_ph)[0]
+    x_unlabeled_obs = tf.tile(tf.expand_dims(x_unlabeled_ph, 0),
+                              [n_particles, 1, 1])
     proposal = unlabeled_proposal(x_unlabeled_ph, n_y, n_z, n_particles)
     qy_samples, log_qy = proposal.query('y', outputs=True, local_log_prob=True)
     qz_samples, log_qz = proposal.query('z', outputs=True, local_log_prob=True)
     log_qz = tf.reduce_sum(log_qz, -1)
     unlabeled_cost, unlabeled_log_likelihood = zs.rws(
-        log_joint, {'x': x_unlabeled_ph},
-        {'y': [qy_samples, log_qy], 'z': [qz_samples, log_qz]},
-        reduction_indices=0)
+        log_joint, {'x': x_unlabeled_obs},
+        {'y': [qy_samples, log_qy], 'z': [qz_samples, log_qz]}, axis=0)
     unlabeled_cost = tf.reduce_mean(unlabeled_cost)
     unlabeled_log_likelihood = tf.reduce_mean(unlabeled_log_likelihood)
 
@@ -159,12 +149,14 @@ if __name__ == "__main__":
     pred_y = tf.argmax(qy_l, 1)
     acc = tf.reduce_sum(
         tf.cast(tf.equal(pred_y, tf.argmax(y_labeled_ph, 1)), tf.float32) /
-        tf.cast(n, tf.float32))
+        tf.cast(tf.shape(x_labeled_ph)[0], tf.float32))
     log_qy_x = zs.discrete.logpmf(y_labeled_ph, qy_logits_l)
     classifier_cost = -beta * tf.reduce_mean(log_qy_x)
 
     # Gather gradients
     cost = (labeled_cost + unlabeled_cost + classifier_cost) / 2.
+    learning_rate_ph = tf.placeholder(tf.float32, shape=[], name='lr')
+    optimizer = tf.train.AdamOptimizer(learning_rate_ph)
     grads = optimizer.compute_gradients(cost)
     infer = optimizer.apply_gradients(grads)
 

@@ -31,6 +31,7 @@ class GradientDescentOptimizer:
     :param c: Parameter for line search (default 0.5).
     :param tau: Parameter for line search (default 1.2).
     """
+
     def __init__(self, sess, data, objective, vars, init=None,
                  stepsize=1, max_n_iterations=100, tol=1e-3, stepsize_tol=1e-9,
                  c=0.5, tau=1.2):
@@ -100,7 +101,8 @@ class GradientDescentOptimizer:
 
             # Perform line search
             while True:
-                new_x = map(lambda (x, y): x-self.stepsize*y, zip(self.x, g))
+                new_x = map(lambda (x, y): x - self.stepsize * y,
+                            zip(self.x, g))
                 new_obj = self.get_obj(new_x)
                 new_obj = 1e100 if np.isnan(new_obj) else new_obj
                 # print('Stepsize = {}, New point = {}, New objective = {}'
@@ -108,7 +110,7 @@ class GradientDescentOptimizer:
 
                 amount_of_decrease = obj - new_obj
                 if amount_of_decrease > self.stepsize * t \
-                   or self.stepsize < self.stepsize_tol:
+                        or self.stepsize < self.stepsize_tol:
                     self.x = new_x
                     break
                 self.stepsize /= self.tau

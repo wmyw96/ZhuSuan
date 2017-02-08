@@ -1,4 +1,3 @@
-tensorflow
-prettytensor
+tensorflow>=1.0.0rc1
 numpy
 six

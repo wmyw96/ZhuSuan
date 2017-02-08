@@ -85,12 +85,12 @@ class BayesianNN():
         x = tf.tile(tf.expand_dims(tf.expand_dims(x, 2), 1),
                     [1, tf.shape(w1)[1], 1, 1])
         x = tf.concat([x, tf.ones((tf.shape(x)[0], tf.shape(x)[1], 1, 1))],
-                      2)
+                         2)
 
         l = tf.matmul(w1, x) / \
             tf.sqrt(tf.cast(tf.shape(x)[2], tf.float32))
         l = tf.concat([l, tf.ones((tf.shape(l)[0], tf.shape(l)[1], 1, 1))],
-                      2)
+                         2)
         l = tf.nn.relu(l)
 
         y = tf.matmul(w2, l) / \
@@ -180,8 +180,7 @@ if __name__ == '__main__':
     w1_outputs, w2_outputs = get_output([lw1, lw2])
     latent = {'w1': w1_outputs, 'w2': w2_outputs}
 
-    lower_bound = tf.reduce_mean(advi(
-        model, observed, latent, reduction_indices=1))
+    lower_bound = tf.reduce_mean(advi(model, observed, latent))
     grads = optimizer.compute_gradients(-lower_bound)
     infer = optimizer.apply_gradients(grads)
 

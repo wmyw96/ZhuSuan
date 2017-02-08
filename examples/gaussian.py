@@ -1,25 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import absolute_import
-from __future__ import print_function
 from __future__ import division
-import sys
-import os
-import time
+from __future__ import print_function
 
-import tensorflow as tf
 import numpy as np
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from zhusuan.mcmc.hmc import HMC
-from matplotlib import pyplot as plt
-import scipy
 import scipy.stats
-import math
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-try:
-    import zhusuan as zs
-except:
-    raise ImportError()
+import tensorflow as tf
+import zhusuan as zs
 
 tf.set_random_seed(1)
 
@@ -31,6 +18,7 @@ n_dims = 10
 stdev = 1 / (np.array(range(n_dims)) + 1)
 log_stdev = np.log(stdev)
 n_leapfrogs = 5
+
 
 def gaussian(observed):
     with zs.StochasticGraph(observed=observed) as model:
@@ -44,13 +32,15 @@ def log_joint(latent, observed, given):
     log_p = model.local_log_prob(['x'])
     return tf.reduce_sum(log_p[0], -1)
 
-adapt_step_size = tf.placeholder(dtype=tf.bool, shape=[], name="adapt_step_size")
+
+adapt_step_size = tf.placeholder(dtype=tf.bool, shape=[],
+                                 name="adapt_step_size")
 adapt_mass = tf.placeholder(dtype=tf.bool, shape=[], name="adapt_mass")
-hmc = HMC(step_size=1e-3, n_leapfrogs=n_leapfrogs, 
-          adapt_step_size=adapt_step_size, adapt_mass=adapt_mass)
-#hmc = HMC(step_size=0.1, n_leapfrogs=n_leapfrogs, 
-#          adapt_step_size=adapt_step_size)
-#hmc = HMC(step_size=0.1, n_leapfrogs=n_leapfrogs)
+hmc = zs.HMC(step_size=1e-3, n_leapfrogs=n_leapfrogs,
+             adapt_step_size=adapt_step_size, adapt_mass=adapt_mass)
+# hmc = zs.HMC(step_size=0.1, n_leapfrogs=n_leapfrogs,
+#              adapt_step_size=adapt_step_size)
+# hmc = zs.HMC(step_size=0.1, n_leapfrogs=n_leapfrogs)
 
 x = tf.Variable(tf.zeros((num_chains, n_dims)), name='x')
 sampler = hmc.sample(log_joint, {}, {'x': x}, chain_axis=0)
@@ -67,9 +57,9 @@ train_writer.close()
 samples = []
 print('Sampling...')
 for i in range(num_samples):
-    q, p, oh, nh, ol, nl, ar, ss = sess.run(sampler,
-                                            feed_dict={adapt_step_size: i < burnin,
-                                                       adapt_mass: i < burnin})
+    q, p, oh, nh, ol, nl, ar, ss = sess.run(
+        sampler, feed_dict={adapt_step_size: i < burnin,
+                            adapt_mass: i < burnin})
     print('Acceptance rate = {}, step size = {}'.format(np.mean(ar), ss))
 
     if i >= burnin:
@@ -80,19 +70,21 @@ samples = np.vstack(samples)
 
 def kde(xs, mu, batch_size):
     mu_n = len(mu)
-    assert(mu_n % batch_size == 0)
+    assert mu_n % batch_size == 0
     xs_row = np.expand_dims(xs, 1)
     ys = np.zeros(xs.shape)
 
     for b in range(mu_n // batch_size):
-        mu_col = np.expand_dims(mu[b*batch_size:(b+1)*batch_size], 0)
+        mu_col = np.expand_dims(mu[b * batch_size:(b + 1) * batch_size], 0)
         ys += (1 / np.sqrt(2 * np.pi) / kernel_width) * \
-             np.mean(np.exp((-0.5 / kernel_width ** 2) * np.square(xs_row - mu_col)), 1)
+            np.mean(np.exp((-0.5 / kernel_width ** 2) *
+                    np.square(xs_row - mu_col)), 1)
 
     ys /= (mu_n / batch_size)
     return ys
 
-#if n_dims == 1:
+
+# if n_dims == 1:
 #    xs = np.linspace(-5, 5, 1000)
 #    ys = kde(xs, np.squeeze(samples), num_chains)
 #
@@ -101,11 +93,12 @@ def kde(xs, mu, batch_size):
 #    ax.plot(xs, scipy.stats.norm.pdf(xs, scale=stdev[0]))
 
 for i in range(n_dims):
-    print(scipy.stats.normaltest(samples[:,i]))
+    print(scipy.stats.normaltest(samples[:, i]))
 
 print('Sample mean = {}'.format(np.mean(samples, 0)))
 print('Expected stdev = {}'.format(stdev))
 print('Got stdev = {}'.format(np.std(samples, 0)))
-print('Relative error of stdev = {}'.format((np.std(samples, 0)-stdev)/stdev))
+print('Relative error of stdev = {}'.format(
+    (np.std(samples, 0) - stdev) / stdev))
 
-#plt.show()
+# plt.show()
