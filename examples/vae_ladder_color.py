@@ -243,10 +243,10 @@ if __name__ == "__main__":
     latents = dict(zip(list(six.iterkeys(post)), zs_))
     lower_bound = tf.reduce_mean(
         zs.advi(log_joint, {'x': x}, latents,
-                reduction_indices=0))
+                axis=0))
     log_likelihood = tf.reduce_mean(
         zs.is_loglikelihood(log_joint, {'x': x}, latents,
-                            reduction_indices=0))
+                            axis=0))
     bits_per_dim = -lower_bound / n_x * 1. / np.log(2.)
     grads = optimizer.compute_gradients(bits_per_dim)
     infer = optimizer.apply_gradients(grads)
@@ -310,12 +310,13 @@ if __name__ == "__main__":
                 test_bits = []
                 for t in range(test_iters):
                     test_x_batch = x_test[
-                                   t * test_batch_size: (
-                                                        t + 1) * test_batch_size]
+                                   t * test_batch_size:
+                                   (t + 1) * test_batch_size]
                     test_lb, test_bit = sess.run([lower_bound, bits_per_dim],
-                                                 feed_dict={x: test_x_batch,
-                                                            n_particles: lb_samples,
-                                                            is_training: False})
+                                                 feed_dict={
+                                                     x: test_x_batch,
+                                                     n_particles: lb_samples,
+                                                     is_training: False})
                     test_ll = sess.run(log_likelihood,
                                        feed_dict={x: test_x_batch,
                                                   n_particles: ll_samples,
