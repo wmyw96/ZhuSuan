@@ -12,7 +12,12 @@ import tensorflow as tf
 from tensorflow.contrib import layers
 from six.moves import range
 import numpy as np
-import zhusuan as zs
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    import zhusuan as zs
+except:
+    raise ImportError()
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
@@ -63,7 +68,7 @@ if __name__ == "__main__":
     data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              'data', 'mnist.pkl.gz')
     np.random.seed(1234)
-    x_labeled, t_labeled, x_unlabeled, x_test, t_test = \
+    x_labeled, t_labeled, x_unlabeled, t_unlabeled, x_test, t_test = \
         dataset.load_mnist_semi_supervised(data_path, one_hot=True)
     x_test = np.random.binomial(1, x_test, size=x_test.shape).astype('float32')
     n_labeled, n_x = x_labeled.shape
@@ -142,15 +147,14 @@ if __name__ == "__main__":
     qy_logits_l = qy_x(x_labeled_ph, n_y)
     qy_l = tf.nn.softmax(qy_logits_l)
     pred_y = tf.argmax(qy_l, 1)
-    acc = tf.reduce_sum(
-        tf.cast(tf.equal(pred_y, tf.argmax(y_labeled_ph, 1)), tf.float32) /
-        tf.cast(tf.shape(x_labeled_ph)[0], tf.float32))
+    acc = tf.reduce_mean(
+        tf.cast(tf.equal(pred_y, tf.argmax(y_labeled_ph, 1)), tf.float32))
     log_qy_x = zs.discrete.logpmf(y_labeled_ph, qy_logits_l)
-    classifier_cost = -beta * tf.reduce_mean(log_qy_x)
+    log_qy_x = tf.reduce_mean(log_qy_x)
+    classifier_cost = -beta * log_qy_x
 
     # Gather gradients
-    cost = -(labeled_lower_bound + unlabeled_lower_bound -
-             classifier_cost) / 2.
+    cost = -(labeled_lower_bound + unlabeled_lower_bound) / 2.
     learning_rate_ph = tf.placeholder(tf.float32, shape=[], name='lr')
     optimizer = tf.train.AdamOptimizer(learning_rate_ph)
     grads = optimizer.compute_gradients(cost)
@@ -167,23 +171,28 @@ if __name__ == "__main__":
             time_epoch = -time.time()
             if epoch % anneal_lr_freq == 0:
                 learning_rate *= anneal_lr_rate
-            np.random.shuffle(x_unlabeled)
-            lbs_labeled = []
-            lbs_unlabeled = []
-            train_accs = []
+            indices = np.random.permutation(x_unlabeled.shape[0])
+            x_unlabeled = x_unlabeled[indices]
+            t_unlabeled = t_unlabeled[indices]
+            lbs_labeled, lbs_unlabeled, train_accs, train_costs = [], [], [], []
+            unlabeled_accs, unlabeled_costs = [], []
             for t in range(iters):
+                iter = t + 1
                 labeled_indices = np.random.randint(0, n_labeled,
                                                     size=batch_size)
                 x_labeled_batch = x_labeled[labeled_indices]
                 y_labeled_batch = t_labeled[labeled_indices]
                 x_unlabeled_batch = x_unlabeled[t * batch_size:
                                                 (t + 1) * batch_size]
+                y_unlabeled_batch = t_unlabeled[t * batch_size:
+                                                (t + 1) * batch_size]
                 x_labeled_batch_bin = sess.run(
                     x_bin, feed_dict={x_orig: x_labeled_batch})
                 x_unlabeled_batch_bin = sess.run(
                     x_bin, feed_dict={x_orig: x_unlabeled_batch})
-                _, lb_labeled, lb_unlabeled, train_acc = sess.run(
-                    [infer, labeled_lower_bound, unlabeled_lower_bound, acc],
+                _, lb_labeled, lb_unlabeled, train_cost, train_acc = sess.run(
+                    [infer, labeled_lower_bound, unlabeled_lower_bound,
+                     log_qy_x, acc],
                     feed_dict={x_labeled_ph: x_labeled_batch_bin,
                                y_labeled_ph: y_labeled_batch,
                                x_unlabeled_ph: x_unlabeled_batch_bin,
@@ -192,34 +201,41 @@ if __name__ == "__main__":
                 lbs_labeled.append(lb_labeled)
                 lbs_unlabeled.append(lb_unlabeled)
                 train_accs.append(train_acc)
+                train_costs.append(train_cost)
             time_epoch += time.time()
             print('Epoch {} ({:.1f}s), Lower bound: labeled = {}, '
-                  'unlabeled = {} Accuracy: {:.2f}%'.
+                  'unlabeled = {} Cost = {} Accuracy: {:.2f}%'.
                   format(epoch, time_epoch, np.mean(lbs_labeled),
-                         np.mean(lbs_unlabeled), np.mean(train_accs) * 100.))
+                         np.mean(lbs_unlabeled), np.mean(train_costs),
+                         np.mean(train_accs) * 100.))
             if epoch % test_freq == 0:
                 time_test = -time.time()
                 test_lls_labeled = []
                 test_lls_unlabeled = []
                 test_accs = []
+                test_costs = []
                 for t in range(test_iters):
                     test_x_batch = x_test[
                         t * test_batch_size: (t + 1) * test_batch_size]
                     test_y_batch = t_test[
                         t * test_batch_size: (t + 1) * test_batch_size]
-                    test_ll_labeled, test_ll_unlabeled, test_acc = sess.run(
-                        [labeled_lower_bound, unlabeled_lower_bound, acc],
-                        feed_dict={x_labeled_ph: test_x_batch,
-                                   y_labeled_ph: test_y_batch,
-                                   x_unlabeled_ph: test_x_batch,
-                                   n_particles: lb_samples})
+                    test_ll_labeled, test_ll_unlabeled, test_cost, test_acc = \
+                        sess.run(
+                            [labeled_lower_bound, unlabeled_lower_bound,
+                             log_qy_x, acc],
+                            feed_dict={x_labeled_ph: test_x_batch,
+                                       y_labeled_ph: test_y_batch,
+                                       x_unlabeled_ph: test_x_batch,
+                                       n_particles: lb_samples})
                     test_lls_labeled.append(test_ll_labeled)
                     test_lls_unlabeled.append(test_ll_unlabeled)
                     test_accs.append(test_acc)
+                    test_costs.append(test_cost)
                 time_test += time.time()
                 print('>>> TEST ({:.1f}s)'.format(time_test))
-                print('>> Test lower bound: labeled = {}, unlabeled = {}'.
+                print('>> Test lower bound: labeled = {}, unlabeled = {} Cost = {}'.
                       format(np.mean(test_lls_labeled),
-                             np.mean(test_lls_unlabeled)))
+                             np.mean(test_lls_unlabeled),
+                             np.mean(test_costs)))
                 print('>> Test accuracy: {:.2f}%'.format(
                     100. * np.mean(test_accs)))

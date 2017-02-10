@@ -33,24 +33,6 @@ except:
     raise ImportError()
 
 
-def split(x, split_dim, split_sizes):
-    n = len(list(x.get_shape()))
-    dim_size = np.sum(split_sizes)
-    assert int(x.get_shape()[split_dim]) == dim_size
-    ids = np.cumsum([0] + split_sizes)
-    ids[-1] = -1
-    begin_ids = ids[:-1]
-
-    ret = []
-    for i in range(len(split_sizes)):
-        cur_begin = np.zeros([n], dtype=np.int32)
-        cur_begin[split_dim] = begin_ids[i]
-        cur_end = np.zeros([n], dtype=np.int32) - 1
-        cur_end[split_dim] = split_sizes[i]
-        ret += [tf.slice(x, cur_begin, cur_end)]
-    return ret
-
-
 @zs.reuse('model')
 def M2(observed, n, n_y, groups, n_particles):
     with zs.StochasticGraph(observed=observed) as model:
@@ -75,8 +57,8 @@ def M2(observed, n, n_y, groups, n_particles):
                     h1, group.n_z * 2 + group.num_filters, 3,
                     activation_fn=None, scope=name + '_down_conv1')
 
-                h1, pz_mean, pz_logstd = split(
-                    h1, -1, [group.num_filters] + [group.n_z] * 2
+                h1, pz_mean, pz_logstd = tf.split(
+                    h1, [group.num_filters] + [group.n_z] * 2, axis=3
                 )
                 z = zs.Normal(name, pz_mean, pz_logstd)
                 z = tf.reshape(z, [-1, group.map_size, group.map_size,
@@ -129,8 +111,8 @@ def qz_xy(x, y, n_y, n_xl, groups, n_particles):
                 h1 = layers.conv2d(h1, group.num_filters + 2 * group.n_z, 3,
                                    stride=stride, activation_fn=None,
                                    scope=name + '_up_conv1')
-                qz_mean[name], qz_logstd[name], h1 = split(
-                    h1, -1, [group.n_z] * 2 + [group.num_filters])
+                qz_mean[name], qz_logstd[name], h1 = tf.split(
+                    h1, [group.n_z] * 2 + [group.num_filters], axis=3)
                 h1 = tf.nn.elu(h1)
                 h1 = layers.conv2d(h1, group.num_filters, kernel_size=3,
                                    activation_fn=None, scope=name + '_up_conv2')
@@ -156,8 +138,8 @@ def qz_xy(x, y, n_y, n_xl, groups, n_particles):
                 h1 = layers.conv2d_transpose(
                     h1, group.n_z * 2 + group.num_filters, 3,
                     activation_fn=None, scope=name + '_down_conv1')
-                rz_mean, rz_logstd, h1 = split(
-                    h1, -1, [group.n_z] * 2 + [group.num_filters]
+                rz_mean, rz_logstd, h1 = tf.split(
+                    h1, [group.n_z] * 2 + [group.num_filters], axis=3
                 )
                 rz_mean, rz_logstd = map(
                     lambda k: tf.reshape(k, [n_particles, -1,
@@ -326,16 +308,14 @@ if __name__ == "__main__":
     qy_logits_l = qy_x(x_labeled_ph, n_xl, n_y)
     qy_l = tf.nn.softmax(qy_logits_l)
     pred_y = tf.argmax(qy_l, 1)
-    acc = tf.reduce_sum(
-        tf.cast(tf.equal(pred_y, tf.argmax(y_labeled_ph, 1)), tf.float32) /
-        tf.cast(tf.shape(x_labeled_ph)[0], tf.float32))
+    acc = tf.reduce_mean(
+        tf.cast(tf.equal(pred_y, tf.argmax(y_labeled_ph, 1)), tf.float32))
     log_qy_x = zs.discrete.logpmf(y_labeled_ph, qy_logits_l)
     log_qy_x = tf.reduce_mean(log_qy_x)
     classifier_cost = -beta * log_qy_x
 
     # Gather gradients
-    cost = -(unlabeled_lower_bound -
-             classifier_cost) / 2.
+    cost = -(labeled_lower_bound + unlabeled_lower_bound - classifier_cost) / 2.
     grads = optimizer.compute_gradients(cost)
     infer = optimizer.apply_gradients(grads)
 
@@ -353,9 +333,11 @@ if __name__ == "__main__":
             time_epoch = -time.time()
             if epoch % anneal_lr_freq == 0:
                 learning_rate *= anneal_lr_rate
-            np.random.shuffle(x_unlabeled)
+            indices = np.random.permutation(x_unlabeled.shape[0])
+            x_unlabeled = x_unlabeled[indices]
+            t_unlabeled = t_unlabeled[indices]
             lbs_labeled, lbs_unlabeled, train_accs, train_costs = [], [], [], []
-            unlabeled_accs = []
+            unlabeled_accs, unlabeled_costs = [], []
             time_train = -time.time()
             for t in range(iters):
                 iter = t + 1
@@ -375,8 +357,8 @@ if __name__ == "__main__":
                                x_unlabeled_ph: x_unlabeled_batch,
                                learning_rate_ph: learning_rate,
                                n_particles: lb_samples})
-                unlabeled_acc = sess.run(acc,
-                                         feed_dict={
+                unlabeled_acc, unlabeled_cost = sess.run([acc, log_qy_x],
+                                                         feed_dict={
                                              x_labeled_ph: x_unlabeled_batch,
                                              y_labeled_ph: y_unlabeled_batch,
                                          })
@@ -385,15 +367,18 @@ if __name__ == "__main__":
                 train_accs.append(train_acc)
                 train_costs.append(cost)
                 unlabeled_accs.append(unlabeled_acc)
+                unlabeled_costs.append(unlabeled_cost)
                 if iter % print_freq == 0:
-                    print('Epoch={} Iter={:04d}({:.2f}s): '
-                          'LB_l = {:.3f}, LB_u = {:.3f} '
-                          'Log q(y|x) = {:.3f} Acc: {:.2f}% Acc_u: {:.2f}%'.
+                    print('Ep{} Iter{:04d}({:.2f}s): '
+                          'LB_l: {:.2f}, LB_u: {:.2f} '
+                          'log q(y|x): {:.2f} Acc: {:.2f}% '
+                          'log q(y|x)_u: {:.2f} Acc_u: {:.2f}%'.
                           format(epoch, iter,
                                  (time.time() + time_train) / print_freq,
                                  np.mean(lbs_labeled), np.mean(lbs_unlabeled),
                                  np.mean(train_costs),
                                  np.mean(train_accs) * 100.,
+                                 np.mean(unlabeled_costs),
                                  np.mean(unlabeled_accs) * 100.))
                     lbs_labeled, lbs_unlabeled, train_accs, train_costs = \
                         [], [], [], []
@@ -433,4 +418,38 @@ if __name__ == "__main__":
                                  np.mean(test_costs)))
                     print('>> Test accuracy: {:.2f}%'.format(
                         100. * np.mean(test_accs)))
+
+                    time_un = -time.time()
+                    un_lls_labeled = []
+                    un_lls_unlabeled = []
+                    un_accs = []
+                    un_costs = []
+                    for k in range(iters):
+                        un_x_batch = \
+                            x_unlabeled[
+                            k * test_batch_size: test_batch_size * (k + 1)]
+                        un_y_batch = \
+                            t_unlabeled[
+                            k * test_batch_size: (k + 1) * test_batch_size]
+                        un_ll_labeled, un_ll_unlabeled, un_cost, \
+                        un_acc = sess.run(
+                            [labeled_bits_per_dim, unlabeled_bits_per_dim,
+                             log_qy_x, acc],
+                            feed_dict={x_labeled_ph: un_x_batch,
+                                       y_labeled_ph: un_y_batch,
+                                       x_unlabeled_ph: un_x_batch,
+                                       n_particles: lb_samples})
+                        un_lls_labeled.append(un_ll_labeled)
+                        un_lls_unlabeled.append(un_ll_unlabeled)
+                        un_accs.append(un_acc)
+                        un_costs.append(un_cost)
+                    time_un += time.time()
+                    print('>>> TRAIN ({:.1f}s)'.format(time_un))
+                    print('>> TRAIN LB: labeled = {:.3f}, unlabeled = {:.3f} '
+                          'Log q(y|x) = {:.3f}'.
+                          format(np.mean(un_lls_labeled),
+                                 np.mean(un_lls_unlabeled),
+                                 np.mean(un_costs)))
+                    print('>> TRAIN accuracy: {:.2f}%'.format(
+                        100. * np.mean(un_accs)))
 
