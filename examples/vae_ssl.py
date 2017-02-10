@@ -12,18 +12,10 @@ import tensorflow as tf
 from tensorflow.contrib import layers
 from six.moves import range
 import numpy as np
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-try:
-    import zhusuan as zs
-except:
-    raise ImportError()
+import zhusuan as zs
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-try:
-    import dataset
-except:
-    raise ImportError()
+import dataset
 
 
 @zs.reuse('model')
@@ -154,7 +146,8 @@ if __name__ == "__main__":
     classifier_cost = -beta * log_qy_x
 
     # Gather gradients
-    cost = -(labeled_lower_bound + unlabeled_lower_bound) / 2.
+    cost = -(labeled_lower_bound + unlabeled_lower_bound -
+             classifier_cost) / 2.
     learning_rate_ph = tf.placeholder(tf.float32, shape=[], name='lr')
     optimizer = tf.train.AdamOptimizer(learning_rate_ph)
     grads = optimizer.compute_gradients(cost)
