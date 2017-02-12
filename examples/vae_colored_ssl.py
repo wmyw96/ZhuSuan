@@ -196,7 +196,7 @@ if __name__ == "__main__":
     data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              'data', 'cifar10', 'cifar-10-python.tar.gz')
     np.random.seed(1234)
-    x_labeled, t_labeled, x_unlabeled, x_test, t_test = \
+    x_labeled, t_labeled, x_unlabeled, t_unlabeled, x_test, t_test = \
         dataset.load_cifar10_semi_supervised(data_path, normalize=True,
                                              one_hot=True)
 
@@ -358,8 +358,11 @@ if __name__ == "__main__":
         for epoch in range(1, epoches + 1):
             if epoch % anneal_lr_freq == 0:
                 learning_rate *= anneal_lr_rate
-            np.random.shuffle(x_unlabeled)
+            indices = np.random.permutation(x_unlabeled.shape[0])
+            x_unlabeled = x_unlabeled[indices]
+            t_unlabeled = t_unlabeled[indices]
             bits_labeleds, bits_unlabeleds, train_accs = [], [], []
+            unlabeled_accs = []
             time_train = -time.time()
             for t in range(iters):
                 iter = t + 1
@@ -369,6 +372,8 @@ if __name__ == "__main__":
                 y_labeled_batch = t_labeled[labeled_indices]
                 x_unlabeled_batch = x_unlabeled[t * batch_size:
                                                 (t + 1) * batch_size]
+                y_unlabeled_batch = t_unlabeled[t * batch_size:
+                                                (t + 1) * batch_size]
                 _, bits_labeled, bits_unlabeled, train_acc = sess.run(
                     [infer, labeled_bits_per_dim, unlabeled_bits_per_dim, acc],
                     feed_dict={x_labeled_ph: x_labeled_batch,
@@ -376,20 +381,27 @@ if __name__ == "__main__":
                                x_unlabeled_ph: x_unlabeled_batch,
                                learning_rate_ph: learning_rate,
                                n_particles: lb_samples})
+                unlabeled_acc = sess.run(acc, feed_dict={
+                                             x_labeled_ph: x_unlabeled_batch,
+                                             y_labeled_ph: y_unlabeled_batch,
+                                         })
                 bits_labeleds.append(bits_labeled)
                 bits_unlabeleds.append(bits_unlabeled)
                 train_accs.append(train_acc)
+                unlabeled_accs.append(unlabeled_acc)
 
                 if iter % print_freq == 0:
-                    print('Epoch={} Iter={:04d}({:.2f}s): '
-                          'bits_l = {:.3f}, bits_u = {:.3f} '
-                          'Acc: {:.2f}%'.
+                    print('Ep{} Iter{:04d}({:.2f}s): '
+                          'LB_l: {:.2f}, LB_u: {:.2f} '
+                          'Acc: {:.2f}% Acc_u: {:.2f}%'.
                           format(epoch, iter,
                                  (time.time() + time_train) / print_freq,
                                  np.mean(bits_labeleds),
                                  np.mean(bits_unlabeleds),
-                                 np.mean(train_accs) * 100.))
+                                 np.mean(train_accs) * 100.,
+                                 np.mean(unlabeled_accs) * 100.))
                     bits_labeleds, bits_unlabeleds, train_accs = [], [], []
+                    unlabeled_accs = []
 
                 if iter % test_freq == 0:
                     time_test = -time.time()
@@ -419,6 +431,35 @@ if __name__ == "__main__":
                                  np.mean(test_bits_unlabeleds)))
                     print('>> Test accuracy: {:.2f}%'.format(
                         100. * np.mean(test_accs)))
+
+                    time_un = -time.time()
+                    un_bits_labeleds = []
+                    un_bits_unlabeleds = []
+                    un_accs = []
+                    un_costs = []
+                    for k in range(iters):
+                        un_x_batch = x_unlabeled[k * test_batch_size:
+                                                 test_batch_size * (k + 1)]
+                        un_y_batch = t_unlabeled[k * test_batch_size:
+                                                 (k + 1) * test_batch_size]
+                        un_bits_labeled, un_bits_unlabeled, un_acc = sess.run(
+                            [labeled_bits_per_dim, unlabeled_bits_per_dim,
+                             acc],
+                            feed_dict={x_labeled_ph: un_x_batch,
+                                       y_labeled_ph: un_y_batch,
+                                       x_unlabeled_ph: un_x_batch,
+                                       n_particles: lb_samples})
+                        un_bits_labeleds.append(un_bits_labeled)
+                        un_bits_unlabeleds.append(un_bits_unlabeled)
+                        un_accs.append(un_acc)
+                    time_un += time.time()
+                    print('>>> TRAIN ({:.1f}s)'.format(time_un))
+                    print('>> TRAIN LB: labeled = {:.3f}, unlabeled = {:.3f} '
+                          'Log q(y|x) = {:.3f}'.
+                          format(np.mean(un_bits_labeleds),
+                                 np.mean(un_bits_unlabeleds)))
+                    print('>> TRAIN accuracy: {:.2f}%'.format(
+                        100. * np.mean(un_accs)))
 
                 if iter % print_freq == 0:
                     time_train = -time.time()

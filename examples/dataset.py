@@ -128,11 +128,12 @@ def load_mnist_semi_supervised(path, one_hot=True, seed=123456):
         t_labeled.append(t_train_by_class[i][indices[:10]])
     x_labeled = np.vstack(x_labeled)
     t_labeled = np.hstack(t_labeled)
-    x_unlabeled = x_train
-    np.random.shuffle(x_unlabeled)
+    indices = rng.permutation(x_train.shape[0])
+    x_unlabeled = x_train[indices]
+    t_unlabeled = t_train[indices]
     t_transform = (lambda x: to_one_hot(x, 10)) if one_hot else (lambda x: x)
-    return x_labeled, t_transform(t_labeled), x_unlabeled, x_test, \
-        t_transform(t_test)
+    return x_labeled, t_transform(t_labeled), x_unlabeled, \
+        t_transform(t_unlabeled), x_test, t_transform(t_test)
 
 
 def load_cifar10(path, normalize=True, dequantify=False, one_hot=True):
@@ -222,11 +223,12 @@ def load_cifar10_semi_supervised(path, normalize=True, dequantify=False,
         t_labeled.append(t_train_by_class[i][indices[:400]])
     x_labeled = np.vstack(x_labeled)
     t_labeled = np.hstack(t_labeled)
-    x_unlabeled = x_train
-    np.random.shuffle(x_unlabeled)
+    indices = rng.permutation(x_train.shape[0])
+    x_unlabeled = x_train[indices]
+    t_unlabeled = t_train[indices]
     t_transform = (lambda x: to_one_hot(x, 10)) if one_hot else (lambda x: x)
-    return x_labeled, t_transform(t_labeled), x_unlabeled, x_test, \
-        t_transform(t_test)
+    return x_labeled, t_transform(t_labeled), x_unlabeled, \
+        t_transform(t_unlabeled), x_test, t_transform(t_test)
 
 
 def load_uci_german_credits(path, n_train):
