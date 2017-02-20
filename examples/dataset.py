@@ -7,10 +7,13 @@ from __future__ import print_function
 import os
 import gzip
 import tarfile
+import sys
+import os
 
 import numpy as np
 from six.moves import urllib, range
 from six.moves import cPickle as pickle
+from scipy.io import loadmat
 
 
 def standardize(data_train, data_test):
@@ -184,8 +187,8 @@ def load_cifar10(path, normalize=True, dequantify=False, one_hot=True):
                                      size=train_x.shape).astype('float32')
         test_x += np.random.uniform(0, 1, size=test_x.shape).astype('float32')
     if normalize:
-        train_x = train_x / 256
-        test_x = test_x / 256
+        train_x /= 256
+        test_x /= 256
 
     train_x = train_x.reshape((50000, 3, 32, 32)).transpose(0, 2, 3, 1)
     test_x = test_x.reshape((10000, 3, 32, 32)).transpose(0, 2, 3, 1)
@@ -275,3 +278,89 @@ def load_uci_boston_housing(path):
     X_test, y_test = data[index_test, :-1], data[index_test, -1]
 
     return X_train, y_train, X_val, y_val, X_test, y_test
+
+
+def load_svhn(path, normalize=True, dequantify=False, one_hot=True):
+    new_data_dir = os.path.join(path, 'svhn')
+    if not os.path.exists(new_data_dir):
+        os.makedirs(new_data_dir)
+
+        def _progress(count, block_size, total_size):
+            sys.stdout.write('\r>> Downloading %.1f%%' % (
+                float(count * block_size) / float(total_size) * 100.0))
+            sys.stdout.flush()
+
+        filepath, _ = urllib.request.urlretrieve(
+            'http://ufldl.stanford.edu/housenumbers/train_32x32.mat',
+            new_data_dir + '/train_32x32.mat', _progress)
+        filepath, _ = urllib.request.urlretrieve(
+            'http://ufldl.stanford.edu/housenumbers/test_32x32.mat',
+            new_data_dir + '/test_32x32.mat', _progress)
+
+    train_data = loadmat(os.path.join(path, 'svhn') +
+                         '/train_32x32.mat')
+    train_x = train_data['X']
+    train_y = train_data['y'].flatten()
+    train_y[train_y == 10] = 0
+
+    test_data = loadmat(os.path.join(path, 'svhn') +
+                        '/test_32x32.mat')
+    test_x = test_data['X']
+    test_y = test_data['y'].flatten()
+    test_y[test_y == 10] = 0
+    train_x = train_x.astype('float32')
+    test_x = test_x.astype('float32')
+    if dequantify:
+        train_x += np.random.uniform(0, 1,
+                                     size=train_x.shape).astype('float32')
+        test_x += np.random.uniform(0, 1, size=test_x.shape).astype('float32')
+    if normalize:
+        train_x /= 256
+        test_x /= 256
+    train_x = train_x.transpose((3, 0, 1, 2))  # (73257, 32, 32, 3)
+    test_x = test_x.transpose((3, 0, 1, 2))  # (26032, 32, 32, 3)
+    t_transform = (lambda x: to_one_hot(x, 10)) if one_hot else (lambda x: x)
+    return train_x, t_transform(train_y), test_x, t_transform(test_y)
+
+
+def load_svhn_semi_supervised(path, num_labeled_each_cls=100, normalize=True,
+                              dequantify=False, one_hot=True, seed=123456):
+    """
+    Select 100 labeled data for each class and use all the other training data
+    as unlabeled.
+
+    :param path: path to dataset file.
+    :param num_labeled_each_cls: Number of labeled data for each class.
+    :param one_hot: Use one-hot representation for the labels.
+    :param seed: Random seed for selecting labeled data.
+
+    :return: The svhn dataset for semi-supervised learning.
+    """
+    rng = np.random.RandomState(seed=seed)
+    x_train, t_train, x_test, t_test = load_svhn(
+        path, normalize=normalize, dequantify=dequantify, one_hot=False)
+    x_train_by_class = []
+    t_train_by_class = []
+    for i in range(10):
+        indices = np.nonzero(t_train == i)[0]
+        x_train_by_class.append(x_train[indices])
+        t_train_by_class.append(t_train[indices])
+    x_labeled = []
+    t_labeled = []
+    for i in range(10):
+        indices = np.arange(x_train_by_class[i].shape[0])
+        rng.shuffle(indices)
+        x_labeled.append(x_train_by_class[i][indices[:num_labeled_each_cls]])
+        t_labeled.append(t_train_by_class[i][indices[:num_labeled_each_cls]])
+    x_labeled = np.vstack(x_labeled)
+    t_labeled = np.hstack(t_labeled)
+    indices = rng.permutation(x_train.shape[0])
+    x_unlabeled = x_train[indices]
+    t_unlabeled = t_train[indices]
+    t_transform = (lambda x: to_one_hot(x, 10)) if one_hot else (lambda x: x)
+    return x_labeled, t_transform(t_labeled), x_unlabeled, \
+        t_transform(t_unlabeled), x_test, t_transform(t_test)
+
+
+
+
