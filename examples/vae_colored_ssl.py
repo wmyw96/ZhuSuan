@@ -33,6 +33,29 @@ import multi_gpu
 from multi_gpu import FLAGS
 
 
+def entropy(p_logits):
+    return tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
+        labels=tf.nn.softmax(p_logits), logits=p_logits))
+
+
+def categorical_crossentropy_of_mean(p_logits):
+    uniform_targets = tf.ones([10], dtype=tf.float32) / 10.
+    return tf.nn.softmax_cross_entropy_with_logits(
+        labels=uniform_targets,
+        logits=tf.reduce_mean(tf.nn.softmax(p_logits), axis=0))
+
+
+def ssl_classifier_cost(p_logits_l, t_labels_l, p_logits_u,
+                        alpha_labeled=1., alpha_unlabeled=.3,
+                        alpha_average=1e-3):
+    ce_loss = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
+        labels=t_labels_l, logits=p_logits_l))
+    en_loss = entropy(p_logits_u)
+    av_loss = categorical_crossentropy_of_mean(p_logits_u)
+    return alpha_labeled * ce_loss + alpha_unlabeled * en_loss + \
+           alpha_average * av_loss
+
+
 @zs.reuse('model')
 def M2(observed, n, n_y, groups, n_particles):
     with zs.StochasticGraph(observed=observed) as model:
@@ -172,19 +195,49 @@ def qz_xy(x, y, n_y, n_xl, groups, n_particles):
 
 
 @zs.reuse('classifier')
-def qy_x(x, n_xl, n_y):
+def qy_x(x, n_xl, n_y, is_training):
+    normalizer_params = {'is_training': is_training,
+                         'updates_collections': None}
     ly_x = tf.reshape(x, [-1, n_xl, n_xl, 3])
-    ly_x = layers.conv2d(ly_x, 32, 3)
-    ly_x = layers.conv2d(ly_x, 32, 3)
-    ly_x = layers.max_pool2d(ly_x, 2)
-    ly_x = layers.conv2d(ly_x, 64, 3)
-    ly_x = layers.conv2d(ly_x, 64, 3)
-    ly_x = layers.max_pool2d(ly_x, 2)
-    ly_x = layers.conv2d(ly_x, 128, 3)
-    ly_x = layers.conv2d(ly_x, 128, 3)
-    ly_x = layers.max_pool2d(ly_x, 2)
-    ly_x = layers.flatten(ly_x)
-    ly_x = layers.fully_connected(ly_x, 500)
+    # ly_x = layers.conv2d(ly_x, 32, 3)
+    # ly_x = layers.conv2d(ly_x, 32, 3)
+    # ly_x = layers.max_pool2d(ly_x, 2)
+    # ly_x = layers.conv2d(ly_x, 64, 3)
+    # ly_x = layers.conv2d(ly_x, 64, 3)
+    # ly_x = layers.max_pool2d(ly_x, 2)
+    # ly_x = layers.conv2d(ly_x, 128, 3)
+    # ly_x = layers.conv2d(ly_x, 128, 3)
+    # ly_x = layers.max_pool2d(ly_x, 2)
+    # ly_x = layers.flatten(ly_x)
+    # ly_x = layers.fully_connected(ly_x, 500)
+
+    ly_x = layers.dropout(ly_x, keep_prob=0.8, is_training=is_training)
+    ly_x = layers.conv2d(ly_x, 128, 3, normalizer_fn=layers.batch_norm,
+                         normalizer_params=normalizer_params)
+    ly_x = layers.conv2d(ly_x, 128, 3, normalizer_fn=layers.batch_norm,
+                         normalizer_params=normalizer_params)
+    ly_x = layers.conv2d(ly_x, 128, 3, normalizer_fn=layers.batch_norm,
+                         normalizer_params=normalizer_params)
+    ly_x = layers.max_pool2d(ly_x, kernel_size=2)
+    ly_x = layers.dropout(ly_x, keep_prob=0.5, is_training=is_training)
+    ly_x = layers.conv2d(ly_x, 256, 3, normalizer_fn=layers.batch_norm,
+                         normalizer_params=normalizer_params)
+    ly_x = layers.conv2d(ly_x, 256, 3, normalizer_fn=layers.batch_norm,
+                         normalizer_params=normalizer_params)
+    ly_x = layers.conv2d(ly_x, 256, 3, normalizer_fn=layers.batch_norm,
+                         normalizer_params=normalizer_params)
+    ly_x = layers.max_pool2d(ly_x, kernel_size=2)
+    ly_x = layers.dropout(ly_x, keep_prob=0.5)
+    ly_x = layers.conv2d(ly_x, 512, 3, padding='VALID',
+                         normalizer_fn=layers.batch_norm,
+                         normalizer_params=normalizer_params)
+    ly_x = layers.conv2d(ly_x, 256, 1, padding='VALID',
+                         normalizer_fn=layers.batch_norm,
+                         normalizer_params=normalizer_params)
+    ly_x = layers.conv2d(ly_x, 128, 1, padding='VALID',
+                         normalizer_fn=layers.batch_norm,
+                         normalizer_params=normalizer_params)
+    ly_x = tf.reduce_mean(ly_x, axis=[1, 2])
     ly_x = layers.fully_connected(ly_x, n_y, activation_fn=None)
     return ly_x
 
@@ -211,7 +264,7 @@ if __name__ == "__main__":
     lb_samples = 1
     beta = 100.
     epoches = 1000
-    batch_size = 32 * FLAGS.num_gpus
+    batch_size = 20 * FLAGS.num_gpus
     test_batch_size = 32 * FLAGS.num_gpus
     iters = x_unlabeled.shape[0] // batch_size
     test_iters = x_test.shape[0] // test_batch_size
@@ -224,9 +277,9 @@ if __name__ == "__main__":
         'bottle_neck_group',
         ['num_blocks', 'num_filters', 'map_size', 'n_z'])
     groups = [
-        bottle_neck_group(2, 64, 16, 64),
-        bottle_neck_group(2, 64, 8, 64),
-        bottle_neck_group(2, 64, 4, 64)
+        bottle_neck_group(2, 64, 16, 32),
+        bottle_neck_group(2, 64, 8, 32),
+        bottle_neck_group(2, 64, 4, 32)
     ]
 
     # Build the computation graph
@@ -235,6 +288,7 @@ if __name__ == "__main__":
     x_unlabeled_ph = tf.placeholder(tf.float32, shape=[None, n_x], name='x_u')
     n_particles = tf.placeholder(tf.int32, shape=[], name='n_particles')
     learning_rate_ph = tf.placeholder(tf.float32, shape=[], name='lr')
+    is_training = tf.placeholder(tf.bool, shape=[], name='is_training')
     optimizer = utils.AdamaxOptimizer(learning_rate_ph, beta1=0.9,
                                       beta2=0.999)
 
@@ -243,7 +297,8 @@ if __name__ == "__main__":
         tower_slice = slice(id_ * total_n // FLAGS.num_gpus,
                             (id_ + 1) * total_n // FLAGS.num_gpus)
         tower_x_labeled = x_labeled[tower_slice]
-        tower_y_labeled = y_labeled[tower_slice]
+        tower_y_labeled_one_hot = y_labeled[tower_slice]
+        tower_y_labeled = tf.argmax(tower_y_labeled_one_hot, -1)
         tower_x_unlabeled = x_unlabeled[tower_slice]
         n = tf.shape(tower_x_labeled)[0]
 
@@ -266,10 +321,10 @@ if __name__ == "__main__":
         # Labeled
         x_labeled_obs = tf.tile(tf.expand_dims(tower_x_labeled, 0),
                                 [n_particles, 1, 1])
-        y_labeled_obs = tf.tile(tf.expand_dims(tower_y_labeled, 0),
+        y_labeled_obs = tf.tile(tf.expand_dims(tower_y_labeled_one_hot, 0),
                                 [n_particles, 1, 1])
-        variational, z_names = qz_xy(tower_x_labeled, tower_y_labeled, n_y,
-                                     n_xl, groups, n_particles)
+        variational, z_names = qz_xy(tower_x_labeled, tower_y_labeled_one_hot,
+                                     n_y, n_xl, groups, n_particles)
         qz_outputs = variational.query(z_names, outputs=True,
                                        local_log_prob=True)
         zs_ = [[qz_sample,
@@ -303,48 +358,56 @@ if __name__ == "__main__":
                        latents, axis=0)
         # sum over y
         lb_z = tf.reshape(lb_z, [-1, n_y])
-        qy_logits_u = qy_x(tower_x_unlabeled, n_xl, n_y)
+        qy_logits_u = qy_x(tower_x_unlabeled, n_xl, n_y, is_training)
         qy_u = tf.reshape(tf.nn.softmax(qy_logits_u), [-1, n_y])
-        qy_u += 1e-8
+        qy_u = tf.clip_by_value(qy_u, 1e-8, 1-1e-8)
         qy_u /= tf.reduce_sum(qy_u, 1, keep_dims=True)
         log_qy_u = tf.log(qy_u)
+
         unlabeled_lower_bound = tf.reduce_mean(
             tf.reduce_sum(qy_u * (lb_z - log_qy_u), 1))
         unlabeled_bits_per_dim = - unlabeled_lower_bound / n_x / np.log(2.)
 
         # Build classifier
-        qy_logits_l = qy_x(tower_x_labeled, n_xl, n_y)
+        qy_logits_l = qy_x(tower_x_labeled, n_xl, n_y, is_training)
         qy_l = tf.nn.softmax(qy_logits_l)
         pred_y = tf.argmax(qy_l, 1)
-        acc = tf.reduce_sum(
-            tf.cast(tf.equal(pred_y, tf.argmax(tower_y_labeled, 1)),
-                    tf.float32) / tf.cast(n, tf.float32))
-        log_qy_x = zs.discrete.logpmf(tower_y_labeled, qy_logits_l)
-        log_qy_x = tf.reduce_mean(log_qy_x)
-        classifier_cost = -beta * log_qy_x
+        acc = tf.reduce_mean(
+            tf.cast(tf.equal(pred_y, tower_y_labeled), tf.float32))
+
+        classifier_cost = beta * ssl_classifier_cost(
+            qy_logits_l, tower_y_labeled, qy_logits_u, alpha_unlabeled=0.,
+            alpha_average=0.)
 
         # Gather gradients
         cost = -(labeled_lower_bound + unlabeled_lower_bound -
                  classifier_cost) / 2.
+        cost_pre = (- labeled_lower_bound + classifier_cost) / 2.
         grads = optimizer.compute_gradients(cost)
-        return labeled_bits_per_dim, unlabeled_bits_per_dim, acc, grads
+        grads_pre = optimizer.compute_gradients(cost_pre)
+        return labeled_bits_per_dim, unlabeled_bits_per_dim, acc, grads, \
+               grads_pre
 
     tower_losses = []
     tower_grads = []
+    tower_grads_pre = []
     for i in range(FLAGS.num_gpus):
         with tf.device('/gpu:%d' % i):
             with tf.name_scope('tower_%d' % i):
-                labeled_bits_per_dim, unlabeled_bits_per_dim, acc, grads = \
+                labeled_bits_per_dim, unlabeled_bits_per_dim, acc, grads, \
+                    grads_pre = \
                     build_tower_graph(x_labeled_ph, y_labeled_ph,
                                       x_unlabeled_ph, i)
                 tower_losses.append([labeled_bits_per_dim,
                                      unlabeled_bits_per_dim, acc])
                 tower_grads.append(grads)
+                tower_grads_pre.append(grads_pre)
     labeled_bits_per_dim, unlabeled_bits_per_dim, acc = \
         multi_gpu.average_losses(tower_losses)
     grads = multi_gpu.average_gradients(tower_grads)
+    grads_pre = multi_gpu.average_gradients(tower_grads_pre)
     infer = optimizer.apply_gradients(grads)
-
+    infer_pre = optimizer.apply_gradients(grads_pre)
     total_size = 0
     params = tf.trainable_variables()
     for i in params:
@@ -374,16 +437,22 @@ if __name__ == "__main__":
                                                 (t + 1) * batch_size]
                 y_unlabeled_batch = t_unlabeled[t * batch_size:
                                                 (t + 1) * batch_size]
+                if epoch in range(1, 11):
+                    infer_f = infer_pre
+                else:
+                    infer_f = infer
                 _, bits_labeled, bits_unlabeled, train_acc = sess.run(
-                    [infer, labeled_bits_per_dim, unlabeled_bits_per_dim, acc],
+                    [infer_f, labeled_bits_per_dim, unlabeled_bits_per_dim, acc],
                     feed_dict={x_labeled_ph: x_labeled_batch,
                                y_labeled_ph: y_labeled_batch,
                                x_unlabeled_ph: x_unlabeled_batch,
                                learning_rate_ph: learning_rate,
-                               n_particles: lb_samples})
+                               n_particles: lb_samples,
+                               is_training: True})
                 unlabeled_acc = sess.run(acc, feed_dict={
                                              x_labeled_ph: x_unlabeled_batch,
                                              y_labeled_ph: y_unlabeled_batch,
+                                             is_training: False
                                          })
                 bits_labeleds.append(bits_labeled)
                 bits_unlabeleds.append(bits_unlabeled)
@@ -420,7 +489,8 @@ if __name__ == "__main__":
                                 feed_dict={x_labeled_ph: test_x_batch,
                                            y_labeled_ph: test_y_batch,
                                            x_unlabeled_ph: test_x_batch,
-                                           n_particles: lb_samples})
+                                           n_particles: lb_samples,
+                                           is_training: False})
                         test_bits_labeleds.append(test_bits_labeled)
                         test_bits_unlabeleds.append(test_bits_unlabeled)
                         test_accs.append(test_acc)
@@ -432,34 +502,6 @@ if __name__ == "__main__":
                     print('>> Test accuracy: {:.2f}%'.format(
                         100. * np.mean(test_accs)))
 
-                    time_un = -time.time()
-                    un_bits_labeleds = []
-                    un_bits_unlabeleds = []
-                    un_accs = []
-                    un_costs = []
-                    for k in range(iters):
-                        un_x_batch = x_unlabeled[k * test_batch_size:
-                                                 test_batch_size * (k + 1)]
-                        un_y_batch = t_unlabeled[k * test_batch_size:
-                                                 (k + 1) * test_batch_size]
-                        un_bits_labeled, un_bits_unlabeled, un_acc = sess.run(
-                            [labeled_bits_per_dim, unlabeled_bits_per_dim,
-                             acc],
-                            feed_dict={x_labeled_ph: un_x_batch,
-                                       y_labeled_ph: un_y_batch,
-                                       x_unlabeled_ph: un_x_batch,
-                                       n_particles: lb_samples})
-                        un_bits_labeleds.append(un_bits_labeled)
-                        un_bits_unlabeleds.append(un_bits_unlabeled)
-                        un_accs.append(un_acc)
-                    time_un += time.time()
-                    print('>>> TRAIN ({:.1f}s)'.format(time_un))
-                    print('>> TRAIN LB: labeled = {:.3f}, unlabeled = {:.3f} '
-                          'Log q(y|x) = {:.3f}'.
-                          format(np.mean(un_bits_labeleds),
-                                 np.mean(un_bits_unlabeleds)))
-                    print('>> TRAIN accuracy: {:.2f}%'.format(
-                        100. * np.mean(un_accs)))
-
                 if iter % print_freq == 0:
                     time_train = -time.time()
+

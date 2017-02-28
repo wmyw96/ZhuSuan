@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import zhusuan as zs
 
 import dataset
+import utils
 
 
 @zs.reuse('model')
@@ -133,6 +134,8 @@ if __name__ == "__main__":
     grads = optimizer.compute_gradients(-lower_bound)
     infer = optimizer.apply_gradients(grads)
 
+    generative_model = vae_conv({}, 100, n_x, n_z, 1, is_training)
+    x_samples = generative_model.query('x', outputs=True)
     params = tf.trainable_variables()
     for i in params:
         print(i.name, i.get_shape())
@@ -158,6 +161,12 @@ if __name__ == "__main__":
             time_epoch += time.time()
             print('Epoch {} ({:.1f}s): Lower bound = {}'.format(
                 epoch, time_epoch, np.mean(lbs)))
+            samples = sess.run(x_samples,
+                               feed_dict={is_training: False})
+            samples = np.reshape(samples, [-1, 28, 28, 1])
+            utils.save_image_collections(
+                samples, './Conv_Epoch{}.png'.format(epoch), shape=(10, 10),
+                scale_each=False, transpose=False)
             if epoch % test_freq == 0:
                 time_test = -time.time()
                 test_lbs = []
@@ -179,3 +188,4 @@ if __name__ == "__main__":
                 print('>>> TEST ({:.1f}s)'.format(time_test))
                 print('>> Test lower bound = {}'.format(np.mean(test_lbs)))
                 print('>> Test log likelihood = {}'.format(np.mean(test_lls)))
+
