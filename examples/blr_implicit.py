@@ -59,7 +59,7 @@ def kde(samples, points, kernel_stdev):
     return log_probs
 
 
-def compute_tickers(probs, n_bins=10):
+def compute_tickers(probs, n_bins=20):
     # Sort
     flat_probs = list(probs.flatten())
     flat_probs.sort()
@@ -90,48 +90,27 @@ if __name__ == "__main__":
     tf.set_random_seed(1234)
     np.random.seed(1234)
 
-    # samples = tf.constant(np.array([[2, 2], [-2, -2]]), dtype=tf.float32)
-    # points = tf.placeholder(tf.float32, [10000, 2])
-    # probs = kde(samples, points, 0.1)
-    #
-    # # Generate a w grid
-    # w0 = np.linspace(-10, 10, 100)
-    # w1 = np.linspace(-10, 10, 100)
-    # w0_grid, w1_grid = np.meshgrid(w0, w1)
-    # w_points = np.hstack(
-    #     (np.reshape(w0_grid, [-1, 1]), np.reshape(w1_grid, [-1, 1])))
-    #
-    # sess = tf.Session()
-    # vals = sess.run(probs, feed_dict={points: w_points})
-    # vals = np.reshape(vals, w0_grid.shape)
-    #
-    # plt.subplot(111)
-    # contourf(w0_grid, w1_grid, vals)
-    # plt.show()
-    #
-    # sys.exit(0)
-
     # Define model parameters
-    N = 5
+    N = 200
     D = 2
     learning_rate = 1
     learning_rate_g = 0.01
-    learning_rate_d = 0.01
+    learning_rate_d = 0.003
     t0 = 100
     t0_d = 100
-    t0_g = 10
+    t0_g = 100
     epoches = 100
-    epoches_d = 5
+    epoches_d = 10
     epoches_d0 = 1000
-    epoches_g = 1000
+    epoches_g = 500
     discriminator_num_samples = 1000
-    generator_num_samples = 1000
+    generator_num_samples = 10000
     lower_box = -5
     upper_box = 5
     kde_batch_size = 2000
     kde_num_samples = 100000
-    kde_stdev = 0.2
-    plot_interval = 1000
+    kde_stdev = 0.05
+    plot_interval = 500
 
 
     def draw_decision_boundary(x, w, y):
@@ -157,14 +136,17 @@ if __name__ == "__main__":
     # Build the computation graph
     x = tf.placeholder(tf.float32, shape=[N, D], name='x')
     y = tf.placeholder(tf.float32, shape=[N], name='y')
-    w_ph = tf.placeholder(tf.float32, shape=[D, None], name='w_ph')
     n_particles = tf.placeholder(tf.int32, shape=[], name='n_particles')
     y_rep = tf.tile(tf.expand_dims(y, axis=1), [1, n_particles])
+    # MFVI
     var_mean = tf.Variable(tf.zeros([D]), name='var_mean')
     var_logstd = tf.Variable(tf.zeros([D]), name='var_logstd')
+    # KDE
     samples_ph = tf.placeholder(tf.float32, shape=[None, D], name='samples')
     points_ph = tf.placeholder(tf.float32, shape=[None, D], name='points')
     grid_prob_op = kde(samples_ph, points_ph, kde_stdev)
+    # Evaluation
+    w_ph = tf.placeholder(tf.float32, shape=[D, None], name='w_ph')
 
     # Variational inference
     def log_joint(observed):
@@ -196,13 +178,10 @@ if __name__ == "__main__":
     # Generator
     with tf.name_scope('generator'):
         epsilon = tf.random_normal((n_particles, D))
-        h = layers.fully_connected(epsilon, 20, scope="generator1",
-                                   weights_initializer=tf.contrib.layers.xavier_initializer())
-        h = layers.fully_connected(h, 20, scope="generator2",
-                                   weights_initializer=tf.contrib.layers.xavier_initializer())
-        generated_w = layers.fully_connected(h, 2, activation_fn=None,
-                                             weights_initializer=tf.contrib.layers.xavier_initializer(),
-                                             scope="generator3")
+        h = layers.fully_connected(epsilon, 20, scope="generator1")
+        h = layers.fully_connected(h, 20, scope="generator2")
+        h = layers.fully_connected(h, 20, scope="generator3")
+        generated_w = layers.fully_connected(h, D, activation_fn=None, scope="generator4")
         generated_w = tf.transpose(generated_w)
 
     # Discriminator
@@ -210,9 +189,9 @@ if __name__ == "__main__":
         with tf.name_scope('discriminator'):
             # [n_particles, D]
             w = tf.transpose(w)
-            h = layers.fully_connected(w, 50, scope="disc1", activation_fn=tf.nn.relu)
-            h = layers.fully_connected(h, 50, scope="disc2", activation_fn=tf.nn.relu)
-            h = layers.fully_connected(h, 50, scope="disc3", activation_fn=tf.nn.relu)
+            h = layers.fully_connected(w, 50, scope="disc1")
+            h = layers.fully_connected(h, 50, scope="disc2")
+            h = layers.fully_connected(h, 50, scope="disc3")
             # [n_particles]
             d = tf.squeeze(layers.fully_connected(h, 1, scope="disc4", activation_fn=None))
 
@@ -284,13 +263,14 @@ if __name__ == "__main__":
         # Run the adverserial inference
         print('Initializing discriminator...')
         for i in range(epoches_d0):
-            _, do, dp, dq, sp, sq, eqd, ep1d = sess.run([d_infer, disc_obj, d_pw,
-                                                         d_qw, w_samples, generated_w, eq_d, ep_1_d],
-                                                        feed_dict={x: nx,
-                                                                   y: ny,
-                                                                   learning_rate_ph: learning_rate_d * t0_d / (
-                                                                   t0_d + i),
-                                                                   n_particles: discriminator_num_samples})
+            _, do, dp, dq, sp, sq, eqd, ep1d = \
+                sess.run([d_infer, disc_obj, d_pw,
+                          d_qw, w_samples, generated_w, eq_d, ep_1_d],
+                        feed_dict={x: nx,
+                                   y: ny,
+                                   learning_rate_ph: learning_rate_d * t0_d / (
+                                   t0_d + i),
+                                   n_particles: discriminator_num_samples})
             if i % 100 == 0:
                 print('Discriminator obj = {}'.format(do))
 
@@ -326,8 +306,8 @@ if __name__ == "__main__":
                 plt.title('Decision boundary')
 
                 # Generate a w grid
-                w0 = np.linspace(-10, 10, 100)
-                w1 = np.linspace(-10, 10, 100)
+                w0 = np.linspace(lower_box, upper_box, 100)
+                w1 = np.linspace(lower_box, upper_box, 100)
                 w0_grid, w1_grid = np.meshgrid(w0, w1)
                 w_points = np.hstack((np.reshape(w0_grid, [-1, 1]), np.reshape(w1_grid, [-1, 1])))
                 # Evaluate log_joint
@@ -340,7 +320,7 @@ if __name__ == "__main__":
                 plt.subplot(3, 3, 2)
                 contourf(w0_grid, w1_grid, lj_grid)
                 plt.plot(nw[0], nw[1], 'x')
-                plt.title('True posterior')
+                plt.title('Unnormalized true posterior')
 
                 # Plot the prior
                 # Evaluate log_joint
@@ -366,8 +346,8 @@ if __name__ == "__main__":
                                    feed_dict={n_particles: kde_num_samples})
                 ax = plt.subplot(3, 3, 7)
                 ax.plot(samples[0,:], samples[1,:], '.')
-                ax.set_xlim(-10, 10)
-                ax.set_ylim(-10, 10)
+                ax.set_xlim(lower_box, upper_box)
+                ax.set_ylim(lower_box, upper_box)
                 plt.title('Implicit posterior samples')
 
                 # Compute kde
