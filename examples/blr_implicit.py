@@ -14,11 +14,13 @@ from six.moves import range
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import zhusuan as zs
+#import seaborn as sns
 
 # For Mac OS
 import matplotlib as mpl
 mpl.use('TkAgg')
 from matplotlib import pyplot as plt
+from matplotlib import ticker, cm, colors
 
 import utils
 
@@ -43,25 +45,93 @@ def q_net(observed, var_mean, var_logstd):
     return variational
 
 
+def kde(samples, points, kernel_stdev):
+    # samples: [n D]
+    # points: [m D]
+    # return [m]
+    samples = tf.expand_dims(samples, 1)
+    points = tf.expand_dims(points, 0)
+    # [n m D]
+    Z = np.sqrt(2 * np.pi) * kernel_stdev
+    log_probs = -np.log(Z) + (-0.5 / kernel_stdev**2) * (samples - points)**2
+    log_probs = tf.reduce_sum(log_probs, -1)
+    log_probs = zs.log_mean_exp(log_probs, 0)
+
+    return log_probs
+
+
+def compute_tickers(probs, n_bins=10):
+    # Sort
+    flat_probs = list(probs.flatten())
+    flat_probs.sort()
+    flat_probs.reverse()
+
+    num_intervals = n_bins * (n_bins - 1) // 2
+    interval_size = len(flat_probs) // num_intervals
+
+    tickers = []
+    cnt = 0
+    for i in range(n_bins - 1):
+        tickers.append(flat_probs[cnt])
+        cnt += interval_size * (i + 1)
+    tickers.append(flat_probs[-1])
+    tickers.reverse()
+    return tickers
+
+
+def contourf(x, y, z):
+    tickers = compute_tickers(z)
+    palette = cm.PuBu
+    plt.contourf(x, y, z, tickers,
+                 cm=palette, norm=colors.BoundaryNorm(tickers, ncolors=palette.N))
+    plt.colorbar()
+
+
 if __name__ == "__main__":
     tf.set_random_seed(1234)
     np.random.seed(1234)
+
+    # samples = tf.constant(np.array([[2, 2], [-2, -2]]), dtype=tf.float32)
+    # points = tf.placeholder(tf.float32, [10000, 2])
+    # probs = kde(samples, points, 0.1)
+    #
+    # # Generate a w grid
+    # w0 = np.linspace(-10, 10, 100)
+    # w1 = np.linspace(-10, 10, 100)
+    # w0_grid, w1_grid = np.meshgrid(w0, w1)
+    # w_points = np.hstack(
+    #     (np.reshape(w0_grid, [-1, 1]), np.reshape(w1_grid, [-1, 1])))
+    #
+    # sess = tf.Session()
+    # vals = sess.run(probs, feed_dict={points: w_points})
+    # vals = np.reshape(vals, w0_grid.shape)
+    #
+    # plt.subplot(111)
+    # contourf(w0_grid, w1_grid, vals)
+    # plt.show()
+    #
+    # sys.exit(0)
 
     # Define model parameters
     N = 5
     D = 2
     learning_rate = 1
-    learning_rate_g = 0.001
+    learning_rate_g = 0.01
     learning_rate_d = 0.01
     t0 = 100
     t0_d = 100
     t0_g = 10
-    epoches = 1000
-    epoches_d = 100
+    epoches = 100
+    epoches_d = 20
     epoches_d0 = 1000
-    epoches_g = 1
+    epoches_g = 200
+    discriminator_num_samples = 10000
+    generator_num_samples = 100000
     lower_box = -5
     upper_box = 5
+    kde_batch_size = 2000
+    kde_num_samples = 100000
+    kde_stdev = 0.2
 
 
     def draw_decision_boundary(x, w, y):
@@ -92,6 +162,9 @@ if __name__ == "__main__":
     y_rep = tf.tile(tf.expand_dims(y, axis=1), [1, n_particles])
     var_mean = tf.Variable(tf.zeros([D]), name='var_mean')
     var_logstd = tf.Variable(tf.zeros([D]), name='var_logstd')
+    samples_ph = tf.placeholder(tf.float32, shape=[None, D], name='samples')
+    points_ph = tf.placeholder(tf.float32, shape=[None, D], name='points')
+    grid_prob_op = kde(samples_ph, points_ph, kde_stdev)
 
     # Variational inference
     def log_joint(observed):
@@ -123,16 +196,14 @@ if __name__ == "__main__":
     # Generator
     with tf.name_scope('generator'):
         epsilon = tf.random_normal((n_particles, D))
-        h = layers.fully_connected(epsilon, 10, scope="generator1")
-        h = layers.fully_connected(h, 10, scope="generator2")
+        h = layers.fully_connected(epsilon, 20, scope="generator1",
+                                   weights_initializer=tf.contrib.layers.xavier_initializer())
+        h = layers.fully_connected(h, 20, scope="generator2",
+                                   weights_initializer=tf.contrib.layers.xavier_initializer())
         generated_w = layers.fully_connected(h, 2, activation_fn=None,
+                                             weights_initializer=tf.contrib.layers.xavier_initializer(),
                                              scope="generator3")
         generated_w = tf.transpose(generated_w)
-
-    # Generator: using tractable q
-    generated_w = qw_samples
-    log_density_ratio = lp - lprior
-    true_d = 1.0 / (1.0 + tf.exp(-log_density_ratio))
 
     # Discriminator
     def discriminator(w):
@@ -150,28 +221,18 @@ if __name__ == "__main__":
     # Objective
     d_qw = discriminator(generated_w)
     d_pw = discriminator(w_samples)
-    # eq_d = -tf.nn.sigmoid_cross_entropy_with_logits(logits=d_qw,
-    #                                                 labels=tf.ones_like(d_qw))
-    # eq_1_d = -tf.nn.sigmoid_cross_entropy_with_logits(logits=d_qw,
-    #                                         labels=tf.zeros_like(d_qw))
-    # ep_1_d = -tf.nn.sigmoid_cross_entropy_with_logits(logits=d_pw,
-    #                                             labels=tf.zeros_like(d_pw))
-    eq_d = d_qw - tf.log(1 + tf.exp(d_qw))
-    eq_1_d = -tf.log(1 + tf.exp(d_qw))
-    ep_1_d = -tf.log(1 + tf.exp(d_pw))
+    sigmoid = tf.nn.sigmoid_cross_entropy_with_logits
+    eq_d = -sigmoid(logits=d_qw, labels=tf.ones_like(d_qw))
+    eq_1_d = -sigmoid(logits=d_qw, labels=tf.zeros_like(d_qw))
+    ep_1_d = -sigmoid(logits=d_pw, labels=tf.zeros_like(d_pw))
     eq_ll = log_joint({'w': generated_w, 'y': y_rep})[2]
     disc_obj = tf.reduce_mean(eq_d + ep_1_d)
-    gen_obj = tf.reduce_mean(eq_d - eq_1_d - eq_ll)
+    prior_term = tf.reduce_mean(eq_d - eq_1_d)
+    ll_term = tf.reduce_mean(-eq_ll)
+    gen_obj = prior_term + ll_term
 
     estimated_d = tf.nn.sigmoid(discriminator(w_ph))
     estimated_q = lprior + discriminator(w_ph)
-
-    eq_log_q = log_qw
-    eq_log_p = log_joint({'w': generated_w})[1]
-    ep_log_q = tf.reduce_sum(q_net({'w': w_samples}, var_mean, var_logstd).local_log_prob('w'), 0)
-    ep_log_p = w_prior
-    optimal_disc_obj = tf.reduce_mean(-tf.log(1 + tf.exp(-eq_log_q + eq_log_p))
-                                      -tf.log(1 + tf.exp(ep_log_q - ep_log_p)))
 
     # Optimizer
     learning_rate_ph = tf.placeholder(tf.float32, shape=[], name='lr')
@@ -182,7 +243,6 @@ if __name__ == "__main__":
                                      scope="disc")
     g_parameters = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
                                      scope="generator")
-    g_parameters = [var_mean, var_logstd]
     print('D parameters')
     for i in d_parameters:
         print(i.name, i.get_shape())
@@ -207,29 +267,6 @@ if __name__ == "__main__":
         nw = np.squeeze(nw)
         ny = np.squeeze(ny)
 
-        # Draw the decision boundary
-        plt.subplot(3, 3, 1)
-        draw_decision_boundary(nx, nw, ny)
-        print('W = {}'.format(nw))
-
-        # Generate a w grid
-        w0 = np.linspace(-10, 10, 100)
-        w1 = np.linspace(-10, 10, 100)
-        w0_grid, w1_grid = np.meshgrid(w0, w1)
-        w_points = np.hstack((np.reshape(w0_grid, [-1, 1]), np.reshape(w1_grid, [-1, 1])))
-        # Evaluate log_joint
-        lj_points = np.transpose(sess.run(lj, feed_dict={x: nx,
-                                            y: ny,
-                                            n_particles: w_points.shape[0],
-                                            w_ph: np.transpose(w_points)}))
-        lj_grid = np.reshape(lj_points, w0_grid.shape)
-
-        plt.subplot(3, 3, 2)
-        plt.pcolormesh(w0_grid, w1_grid, lj_grid)
-        plt.colorbar()
-        CS = plt.contour(w0_grid, w1_grid, lj_grid, colors='k')
-        plt.clabel(CS)
-
         # Run the inference
         for epoch in range(1, epoches + 1):
             time_epoch = -time.time()
@@ -244,20 +281,6 @@ if __name__ == "__main__":
                 print('Epoch {} ({:.1f}s): Lower bound = {}'.format(
                     epoch, time_epoch, lb))
 
-        # Plot the prior
-        # Evaluate log_joint
-        lp_points = np.transpose(sess.run(lp, feed_dict={x: nx,
-                                                         y: ny,
-                                                         n_particles: w_points.shape[0],
-                                                         w_ph: np.transpose(w_points)}))
-        lp_grid = np.reshape(lp_points, w0_grid.shape)
-
-        plt.subplot(3, 3, 4)
-        plt.pcolormesh(w0_grid, w1_grid, lp_grid)
-        plt.colorbar()
-        CS = plt.contour(w0_grid, w1_grid, lp_grid, colors='k')
-        plt.clabel(CS)
-
         # Run the adverserial inference
         for i in range(epoches_d0):
             _, do, dp, dq, sp, sq, eqd, ep1d = sess.run([d_infer, disc_obj, d_pw,
@@ -266,74 +289,122 @@ if __name__ == "__main__":
                                                                    y: ny,
                                                                    learning_rate_ph: learning_rate_d * t0_d / (
                                                                    t0_d + i),
-                                                                   n_particles: 10000})
+                                                                   n_particles: discriminator_num_samples})
             if i % 100 == 0:
                 print('Discriminator obj = {}'.format(do))
 
+        gen_objs = []
+        disc_cnt = 0
         for epoch in range(1, epoches_g + 1):
-            # lr = learning_rate * t0 / (t0 + epoch)
+            lg = learning_rate_g * t0_g / (t0_g + epoch)
             objs = []
+            disc_cnt += 1
             for i in range(epoches_d):
                 _, do, dp, dq, sp, sq, eqd, ep1d = sess.run([d_infer, disc_obj, d_pw,
                                                   d_qw, w_samples, generated_w, eq_d, ep_1_d],
                                  feed_dict={x: nx,
                                             y: ny,
-                                            learning_rate_ph: learning_rate_d * t0_d / (t0_d + i),
-                                            n_particles: 10000})
+                                            learning_rate_ph: lg * 3 / (i + 3),
+                                            n_particles: discriminator_num_samples})
                 objs.append(do)
             print('Discriminator obj = {}, {}'.format(objs[0], objs[-1]))
 
-            # sess.run(g_infer,
-            #          feed_dict={x: nx,
-            #                     y: ny,
-            #                     learning_rate_ph: lr,
-            #                     n_particles: 100})
+            _, go, pv, lv = sess.run([g_infer, gen_obj, prior_term, ll_term],
+                     feed_dict={x: nx,
+                                y: ny,
+                                learning_rate_ph: lg,
+                                n_particles: generator_num_samples})
+            gen_objs.append(go)
+            print('Generator obj = {}, prior = {}, ll = {}'.format(go, pv, lv))
 
-            print('Epoch {}: Discriminator obj = {}'.format(epoch, do))
+            if epoch % 200 == 0:
+                # Draw the decision boundary
+                plt.subplot(3, 3, 1)
+                draw_decision_boundary(nx, nw, ny)
+                plt.title('Decision boundary')
 
-        # Generate samples from the generator
-        # samples = sess.run(generated_w,
-        #                    feed_dict={n_particles: 10000})
-        # plt.subplot(2, 2, 4)
-        # plt.plot(samples[0,:], samples[1,:], '.')
+                # Generate a w grid
+                w0 = np.linspace(-10, 10, 100)
+                w1 = np.linspace(-10, 10, 100)
+                w0_grid, w1_grid = np.meshgrid(w0, w1)
+                w_points = np.hstack((np.reshape(w0_grid, [-1, 1]), np.reshape(w1_grid, [-1, 1])))
+                # Evaluate log_joint
+                lj_points = np.transpose(sess.run(lj, feed_dict={x: nx,
+                                                                 y: ny,
+                                                                 n_particles: w_points.shape[0],
+                                                                 w_ph: np.transpose(w_points)}))
+                lj_grid = np.reshape(lj_points, w0_grid.shape)
 
-        print('Optimal discriminator obj = {}'.format(
-            sess.run(optimal_disc_obj, feed_dict={n_particles: 10000})))
+                plt.subplot(3, 3, 2)
+                contourf(w0_grid, w1_grid, lj_grid)
+                plt.plot(nw[0], nw[1], 'x')
+                plt.title('True posterior')
 
-        plt.subplot(3, 3, 3)
-        plt.plot(objs, '.')
+                # Plot the prior
+                # Evaluate log_joint
+                lp_points = np.transpose(sess.run(lp, feed_dict={x: nx, y: ny,
+                        n_particles: w_points.shape[0],
+                        w_ph: np.transpose(w_points)}))
+                lp_grid = np.reshape(lp_points, w0_grid.shape)
 
-        lp_points = np.transpose(sess.run(estimated_q, feed_dict={x: nx,
-                                                         y: ny,
-                                                         n_particles: w_points.shape[0],
-                                                         w_ph: np.transpose(w_points)}))
-        lp_grid = np.reshape(lp_points, w0_grid.shape)
+                plt.subplot(3, 3, 3)
+                plt.plot(gen_objs, '.')
+                plt.title('Generator objective')
 
-        plt.subplot(3, 3, 5)
-        plt.pcolormesh(w0_grid, w1_grid, lp_grid)
-        plt.colorbar()
-        CS = plt.contour(w0_grid, w1_grid, lp_grid, colors='k')
-        plt.clabel(CS)
+                plt.subplot(3, 3, 6)
+                plt.plot(objs, '.')
+                plt.title('Discriminator objective')
 
+                plt.subplot(3, 3, 4)
+                contourf(w0_grid, w1_grid, lp_grid)
+                plt.title('Mean field posterior')
 
-        lp_points = np.transpose(sess.run(true_d, feed_dict={n_particles: w_points.shape[0],
-                                                             w_ph: np.transpose(w_points)}))
-        lp_grid = np.reshape(lp_points, w0_grid.shape)
+                # Generate samples from the generator
+                samples = sess.run(generated_w,
+                                   feed_dict={n_particles: kde_num_samples})
+                ax = plt.subplot(3, 3, 7)
+                ax.plot(samples[0,:], samples[1,:], '.')
+                ax.set_xlim(-10, 10)
+                ax.set_ylim(-10, 10)
+                plt.title('Implicit posterior samples')
 
-        plt.subplot(3, 3, 7)
-        plt.pcolormesh(w0_grid, w1_grid, lp_grid)
-        plt.colorbar()
-        CS = plt.contour(w0_grid, w1_grid, lp_grid, colors='k')
-        plt.clabel(CS)
+                # Compute kde
+                point_prob = np.zeros((w_points.shape[0]))
+                kde_num_batches = kde_num_samples // kde_batch_size
+                for b in range(kde_num_batches):
+                    sample_batch = samples[:,\
+                                   b*kde_batch_size:(b+1)*kde_batch_size]
+                    point_prob += sess.run(grid_prob_op,
+                            feed_dict={samples_ph: np.transpose(sample_batch),
+                                       points_ph: w_points})
+                point_prob /= kde_num_batches
+                point_prob = np.reshape(point_prob, w0_grid.shape)
 
-        lp_points = np.transpose(sess.run(estimated_d, feed_dict={n_particles: w_points.shape[0],
-                                                             w_ph: np.transpose(w_points)}))
-        lp_grid = np.reshape(lp_points, w0_grid.shape)
+                plt.subplot(3, 3, 5)
+                contourf(w0_grid, w1_grid, point_prob)
+                plt.title('Implicit posterior KDE')
 
-        plt.subplot(3, 3, 8)
-        plt.pcolormesh(w0_grid, w1_grid, lp_grid)
-        plt.colorbar()
-        CS = plt.contour(w0_grid, w1_grid, lp_grid, colors='k')
-        plt.clabel(CS)
+                # Plot estimated q
+                lp_points = np.transpose(sess.run(estimated_q, feed_dict={x: nx,
+                                                                 y: ny,
+                                                                 n_particles: w_points.shape[0],
+                                                                 w_ph: np.transpose(w_points)}))
+                lp_grid = np.reshape(lp_points, w0_grid.shape)
 
-        plt.show()
+                plt.subplot(3, 3, 8)
+                contourf(w0_grid, w1_grid, lp_grid)
+                plt.title('Estimated implicit posterior using discriminator')
+
+                # Plot estimated D
+                lp_points = np.transpose(sess.run(estimated_d, feed_dict={n_particles: w_points.shape[0],
+                                                                     w_ph: np.transpose(w_points)}))
+                lp_grid = np.reshape(lp_points, w0_grid.shape)
+
+                plt.subplot(3, 3, 9)
+                plt.pcolormesh(w0_grid, w1_grid, lp_grid)
+                plt.colorbar()
+                CS = plt.contour(w0_grid, w1_grid, lp_grid, colors='k')
+                plt.clabel(CS)
+                plt.title('Discriminator')
+
+                plt.show()
