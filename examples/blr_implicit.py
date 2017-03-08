@@ -14,7 +14,6 @@ from six.moves import range
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import zhusuan as zs
-#import seaborn as sns
 
 # For Mac OS
 import matplotlib as mpl
@@ -122,16 +121,17 @@ if __name__ == "__main__":
     t0_d = 100
     t0_g = 10
     epoches = 100
-    epoches_d = 20
+    epoches_d = 5
     epoches_d0 = 1000
-    epoches_g = 200
-    discriminator_num_samples = 10000
-    generator_num_samples = 100000
+    epoches_g = 1000
+    discriminator_num_samples = 1000
+    generator_num_samples = 1000
     lower_box = -5
     upper_box = 5
     kde_batch_size = 2000
     kde_num_samples = 100000
     kde_stdev = 0.2
+    plot_interval = 1000
 
 
     def draw_decision_boundary(x, w, y):
@@ -282,6 +282,7 @@ if __name__ == "__main__":
                     epoch, time_epoch, lb))
 
         # Run the adverserial inference
+        print('Initializing discriminator...')
         for i in range(epoches_d0):
             _, do, dp, dq, sp, sq, eqd, ep1d = sess.run([d_infer, disc_obj, d_pw,
                                                          d_qw, w_samples, generated_w, eq_d, ep_1_d],
@@ -293,6 +294,7 @@ if __name__ == "__main__":
             if i % 100 == 0:
                 print('Discriminator obj = {}'.format(do))
 
+        print('Starting adversarial training...')
         gen_objs = []
         disc_cnt = 0
         for epoch in range(1, epoches_g + 1):
@@ -307,7 +309,6 @@ if __name__ == "__main__":
                                             learning_rate_ph: lg * 3 / (i + 3),
                                             n_particles: discriminator_num_samples})
                 objs.append(do)
-            print('Discriminator obj = {}, {}'.format(objs[0], objs[-1]))
 
             _, go, pv, lv = sess.run([g_infer, gen_obj, prior_term, ll_term],
                      feed_dict={x: nx,
@@ -315,9 +316,10 @@ if __name__ == "__main__":
                                 learning_rate_ph: lg,
                                 n_particles: generator_num_samples})
             gen_objs.append(go)
-            print('Generator obj = {}, prior = {}, ll = {}'.format(go, pv, lv))
+            print('Epoch {}, Discriminator obj: {} -> {}, Generator obj = {}, prior = {}, ll = {}'\
+                  .format(epoch, objs[0], objs[-1], go, pv, lv))
 
-            if epoch % 200 == 0:
+            if epoch % plot_interval == 0:
                 # Draw the decision boundary
                 plt.subplot(3, 3, 1)
                 draw_decision_boundary(nx, nw, ny)
