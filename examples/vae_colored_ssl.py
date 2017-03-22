@@ -227,7 +227,7 @@ def qy_x(x, n_xl, n_y, is_training):
     ly_x = layers.conv2d(ly_x, 256, 3, normalizer_fn=layers.batch_norm,
                          normalizer_params=normalizer_params)
     ly_x = layers.max_pool2d(ly_x, kernel_size=2)
-    ly_x = layers.dropout(ly_x, keep_prob=0.5)
+    ly_x = layers.dropout(ly_x, keep_prob=0.5, is_training=is_training)
     ly_x = layers.conv2d(ly_x, 512, 3, padding='VALID',
                          normalizer_fn=layers.batch_norm,
                          normalizer_params=normalizer_params)
