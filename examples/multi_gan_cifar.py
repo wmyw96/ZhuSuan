@@ -45,9 +45,9 @@ def multi_gan(classifier, g_model, l_infer, u_infer):
     Implementation of multi-class gan with (x, y, z) input.
     :param classifier: A function that accepts three tensors and return
         unnormalized logits for the multi-class
-    :param g_model:
-    :param l_infer: 
-    :param u_infer: 
+    :param g_model: Dictionary. Key words x, y, z
+    :param l_infer: Dictionary. Key words x, y, z
+    :param u_infer: Dictionary. Key words x, y, z, qy
     :return: 
     """
     g_model_class_logits = classifier(g_model['x'], g_model['y'], g_model['z'])
@@ -77,11 +77,11 @@ def multi_gan(classifier, g_model, l_infer, u_infer):
         tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
             labels=true_l,
             logits=l_infer_class_logits)),
-        tf.reduce_mean(tf.reshape(
+        tf.reduce_mean(tf.reduce_sum(tf.reshape(
             tf.nn.sparse_softmax_cross_entropy_with_logits(
                 labels=true_u,
                 logits=u_infer_class_logits),
-            (-1, tf.shape(qy_u)[1])) * qy_u)
+            shape=(-1, tf.shape(qy_u)[1])) * qy_u, axis=1))
     ]
     disc_loss = sum(disc_losses_list)
 
@@ -92,11 +92,11 @@ def multi_gan(classifier, g_model, l_infer, u_infer):
         tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(
             labels=tf.zeros_like(fake_l_logits),
             logits=fake_l_logits)),
-        tf.reduce_mean(tf.reshape(
+        tf.reduce_mean(tf.reduce_sum(tf.reshape(
             tf.nn.sigmoid_cross_entropy_with_logits(
                 labels=tf.zeros_like(fake_u_logits),
                 logits=fake_u_logits),
-            (-1, tf.shape(qy_u)[1])) * qy_u)
+            shape=(-1, tf.shape(qy_u)[1])) * qy_u, axis=1))
     ]
     gen_loss = sum(gen_losses_list)
     return disc_loss, gen_loss, disc_losses_list, gen_losses_list
@@ -480,7 +480,7 @@ if __name__ == "__main__":
             fetches = []
             time_train = -time.time()
             for t in range(iters):
-                iter = t + 1
+                itr = t + 1
                 labeled_indices = np.random.randint(0, n_labeled,
                                                     size=batch_size)
                 x_labeled_batch = x_labeled[labeled_indices]
@@ -499,7 +499,7 @@ if __name__ == "__main__":
                                          is_training: True})
                 fetches.append(ft[1:])
 
-                if iter % print_freq == 0:
+                if itr % print_freq == 0:
                     pt_fetches = np.mean(fetches, axis=0)
                     print('Epoch={} Iter={} ({:.3f}s/iter): '
                           'Gen loss = {:.3f} Disc loss = {:.3f} '
@@ -513,12 +513,12 @@ if __name__ == "__main__":
                           'Check qzxy_grads_g Grads, Mean = {}, Var = {}\n'
                           'd_g = {:.3f} d_l = {:.3f} d_u = {:.3f}\n'
                           'g_g = {:.3f} g_l = {:.3f} g_u = {:.3f}'.
-                          format(epoch, iter,
+                          format(epoch, itr,
                                  (time.time() + time_train) / print_freq,
                                  *pt_fetches))
                     fetches = []
 
-                if iter % test_freq == 0:
+                if itr % test_freq == 0:
                     time_test = -time.time()
                     gen_images = sess.run(eval_x_gen,
                                           feed_dict={
@@ -526,7 +526,7 @@ if __name__ == "__main__":
                                               is_training: False})
                     gen_images = np.reshape(gen_images, [-1, n_xl, n_xl,
                                                          n_channels])
-                    name = "gen/epoch.{}.iter.{}.png".format(epoch, iter)
+                    name = "gen/epoch.{}.iter.{}.png".format(epoch, itr)
                     name = os.path.join(result_path, name)
                     utils.save_image_collections(gen_images, name,
                                                  scale_each=True)
@@ -551,7 +551,7 @@ if __name__ == "__main__":
                                             x_unlabeled_ph: x_batch,
                                             is_training: False})
                     name = "recon/epoch.{}.iter.{}.png".format(
-                        epoch, iter)
+                        epoch, itr)
                     name = os.path.join(result_path, name)
                     x_batch = np.reshape(x_batch, [-1, n_xl, n_xl, n_channels])
                     recon_images = np.reshape(recon_images, [-1, n_xl, n_xl,
@@ -565,5 +565,5 @@ if __name__ == "__main__":
                         100. * np.mean(test_accs)))
                     print('Reconst labels {}'.format(eval_ys))
 
-                if iter % print_freq == 0:
+                if itr % print_freq == 0:
                     time_train = -time.time()
