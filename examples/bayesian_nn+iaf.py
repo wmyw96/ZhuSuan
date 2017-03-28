@@ -84,7 +84,7 @@ def MADE(name, id, z, hidden, multiple=3, hidden_layers=2):
 '''
 
 
-def matrixiaf(name, sample, hidden, log_prob, autoregressiveNN, iters, update = 'normal'):
+def matrixiaf(name, sample, hidden, log_prob, autoregressiveNN, iters, update='normal'):
     joint_prob = log_prob
     z = sample
     m = s = None
@@ -105,7 +105,7 @@ def matrixiaf(name, sample, hidden, log_prob, autoregressiveNN, iters, update = 
                 z = s * z + m
                 joint_prob = joint_prob - tf.reduce_sum(tf.log(s), axis=[-1,-2])
                 z = tf.reverse(z, [-1])
-
+            '''
             if D2 > 1:
                 z = tf.transpose(z, perm)
                 m, s = autoregressiveNN(name + 'siaf_row', iter, z, hidden)
@@ -113,6 +113,7 @@ def matrixiaf(name, sample, hidden, log_prob, autoregressiveNN, iters, update = 
                 joint_prob = joint_prob - tf.reduce_sum(tf.log(s), axis=[-1,-2])
                 z = tf.reverse(z, [-1])
                 z = tf.transpose(z, perm)
+            '''
 
         if update == 'gru':
             if D1 > 1:
@@ -122,6 +123,7 @@ def matrixiaf(name, sample, hidden, log_prob, autoregressiveNN, iters, update = 
                 joint_prob = joint_prob - tf.reduce_sum(tf.log(sigma), axis=[-1,-2])
                 z = tf.reverse(z, [-1])
 
+            '''
             if D2 > 1:
                 z = tf.transpose(z, perm)
                 m, s = autoregressiveNN(name + 'siaf_row', iter, z, hidden)
@@ -130,7 +132,7 @@ def matrixiaf(name, sample, hidden, log_prob, autoregressiveNN, iters, update = 
                 joint_prob = joint_prob - tf.reduce_sum(tf.log(sigma), axis=[-1,-2])
                 z = tf.reverse(z, [-1])
                 z = tf.transpose(z, perm)
-
+            '''
 
     return z, joint_prob
 
@@ -195,13 +197,15 @@ def train_init(seed1, seed2, id):
 
     # Load UCI Boston housing data
     data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             'data', 'housing.data')
+                             'data', 'bow.data')
     x_train, y_train, x_valid, y_valid, x_test, y_test = \
-        dataset.load_uci_boston_housing(data_path)
+        dataset.load_uci_bow(data_path)
     x_train = np.vstack([x_train, x_valid]).astype('float32')
     y_train = np.hstack([y_train, y_valid]).astype('float32')
     x_test = x_test.astype('float32')
     N, n_x = x_train.shape
+
+    print('Totally %d data' % N)
 
     # Standardize data
     x_train, x_test, _, _ = dataset.standardize(x_train, x_test)
@@ -248,9 +252,8 @@ def train_init(seed1, seed2, id):
     for (key, value) in latent.items():
         name = key
         qsample = value[0]
-        print(qsample.get_shape())
         qlog_prob = value[1]
-        qsample, qlog_prob = matrixiaf(name, qsample, hidden[name], qlog_prob, zs.linear_ar, 1)
+        qsample, qlog_prob = matrixiaf(name, qsample, hidden[name], qlog_prob, zs.linear_ar, 1, update='normal')
         latentf[name] = [qsample, qlog_prob]
     # latentf = latent
 
@@ -322,9 +325,9 @@ def repeat_train(seed1, seed2, id, lower_bound, infer, log_likelihood, rmse, n_p
 
     # Load UCI Boston housing data
     data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             'data', 'housing.data')
+                             'data', 'bow.data')
     x_train, y_train, x_valid, y_valid, x_test, y_test = \
-        dataset.load_uci_boston_housing(data_path)
+        dataset.load_uci_bow(data_path)
     x_train = np.vstack([x_train, x_valid]).astype('float32')
     y_train = np.hstack([y_train, y_valid]).astype('float32')
     x_test = x_test.astype('float32')
