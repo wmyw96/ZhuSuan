@@ -22,8 +22,8 @@ def bayesianNN(observed, x, n_x, layer_sizes, n_particles):
     with zs.BayesianNet(observed=observed) as model:
         tau = zs.Gamma('tau', alpha=3.0, beta=3.0, n_samples=n_particles,
                        group_event_ndims=0)
-        tau = tf.expand_dims(tau, 1)
-        tau = tf.tile(tau, [1, tf.shape(x)[0]])
+        tau = tf.expand_dims(tf.expand_dims(tf.expand_dims(tau, 1), 2), 3)
+        tau = tf.tile([1, tf.sape()])
         lda = zs.Gamma('lambda', alpha=3.0, beta=3.0, n_samples=n_particles,
                        group_event_ndims=0)
         ws = []
@@ -60,7 +60,7 @@ def bayesianNN(observed, x, n_x, layer_sizes, n_particles):
     return model, y_mean
 
 
-def mean_field_variational(y_mean, y, layer_sizes, n_particles):
+def mean_field_variational(layer_sizes, n_particles):
     with zs.BayesianNet() as variational:
         ws = []
         for i, (n_in, n_out) in enumerate(zip(layer_sizes[:-1],
@@ -74,7 +74,8 @@ def mean_field_variational(y_mean, y, layer_sizes, n_particles):
             ws.append(
                 zs.Normal('w' + str(i), w_mean, w_logstd,
                           n_samples=n_particles, group_event_ndims=2))
-            tau = zs.Normal('tau', )
+
+
     return variational
 
 
@@ -139,7 +140,7 @@ if __name__ == '__main__':
     qw_outputs = variational.query(w_names, outputs=True, local_log_prob=True)
     latent = dict(zip(w_names, qw_outputs))
     lower_bound = tf.reduce_mean(
-        zs.advi(log_joint, {'y': y_obs}, latent, axis=0))
+        zs.sgvb(log_joint, {'y': y_obs}, latent, axis=0))
 
     learning_rate_ph = tf.placeholder(tf.float32, shape=[])
     optimizer = tf.train.AdamOptimizer(learning_rate_ph, epsilon=1e-4)
