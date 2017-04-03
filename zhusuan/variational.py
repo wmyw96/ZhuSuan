@@ -49,7 +49,9 @@ def advi(log_joint, observed, latent, axis=0):
     joint_obs = merge_dicts(observed, latent_outputs)
     lower_bound = log_joint(joint_obs) - sum(latent_logpdfs)
     lower_bound = tf.reduce_mean(lower_bound, axis)
-    return lower_bound
+    reconstruction = log_joint(joint_obs)
+    reconstruction = tf.reduce_mean(reconstruction, axis)
+    return lower_bound, reconstruction
 
 
 def iwae(log_joint, observed, latent, axis=0):
