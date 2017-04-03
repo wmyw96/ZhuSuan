@@ -15,24 +15,37 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import zhusuan as zs
 
 import dataset
-import matplotlib.pyplot as plt
 
 
 @zs.reuse('model')
 def bayesianNN(observed, x, n_x, layer_sizes, n_particles):
     with zs.BayesianNet(observed=observed) as model:
+        tau = zs.Gamma('tau', alpha=3.0, beta=3.0, n_samples=n_particles,
+                       group_event_ndims=0)
+        tau = tf.expand_dims(tau, 1)
+        tau = tf.tile(tau, [1, tf.shape(x)[0]])
+        lda = zs.Gamma('lambda', alpha=3.0, beta=3.0, n_samples=n_particles,
+                       group_event_ndims=0)
         ws = []
         for i, (n_in, n_out) in enumerate(zip(layer_sizes[:-1],
                                               layer_sizes[1:])):
-            w_mu = tf.zeros([1, n_out, n_in + 1])
-            w_logstd = tf.ones([1, n_out, n_in + 1]) * tf.log(1.0)
+            w_mu = tf.zeros([n_particles, 1, n_out, n_in + 1])
+            print(w_mu.get_shape())
+            w_logstd = tf.ones([n_particles, 1,
+                                n_out, n_in + 1]) * tf.log(1.0 / lda)
+            print(w_logstd.get_shape())
+            # [n_particles, 1, n_out, n_in + 1]
             ws.append(zs.Normal('w' + str(i), w_mu, w_logstd,
-                                n_samples=n_particles, group_event_ndims=2))
+                                n_samples=None, group_event_ndims=2))
 
         # forward
+        # ?[(2), (1), (0)]
+        # [n_particles, N, n_x, 1]
         ly_x = tf.expand_dims(
             tf.tile(tf.expand_dims(x, 0), [n_particles, 1, 1]), 3)
+        print(ly_x.get_shape()[2])
         for i in range(len(ws)):
+            # [n_particles, N, n_out, n_in + 1]
             w = tf.tile(ws[i], [1, tf.shape(x)[0], 1, 1])
             ly_x = tf.concat(
                 [ly_x, tf.ones([n_particles, tf.shape(x)[0], 1, 1])], 2)
@@ -42,15 +55,12 @@ def bayesianNN(observed, x, n_x, layer_sizes, n_particles):
                 ly_x = tf.nn.relu(ly_x)
 
         y_mean = tf.squeeze(ly_x, [2, 3])
-        y_logstd = tf.get_variable('y_logstd', shape=[],
-                                   initializer=tf.constant_initializer(0.))
-        #y_logstd = tf.log(1.0)
-        y = zs.Normal('y', y_mean, y_logstd)
+        y = zs.Normal('y', y_mean, tf.log(1.0 / tau))
 
     return model, y_mean
 
 
-def mean_field_variational(layer_sizes, n_particles):
+def mean_field_variational(y_mean, y, layer_sizes, n_particles):
     with zs.BayesianNet() as variational:
         ws = []
         for i, (n_in, n_out) in enumerate(zip(layer_sizes[:-1],
@@ -64,6 +74,7 @@ def mean_field_variational(layer_sizes, n_particles):
             ws.append(
                 zs.Normal('w' + str(i), w_mean, w_logstd,
                           n_samples=n_particles, group_event_ndims=2))
+            tau = zs.Normal('tau', )
     return variational
 
 
@@ -82,15 +93,11 @@ if __name__ == '__main__':
 
     # Load UCI Boston housing data
     # Load toy data set
-    x_train, y_train = toy_data(20)
+    x_train, y_train = toy_data(100)
     x_test = np.arange(-6, 6, 0.01).reshape((-1, 1))
     y_test = x_test * x_test * x_test
     y_test = y_test.reshape((-1))
     N, n_x = x_train.shape
-    plt.plot(x_train.reshape(-1), y_train, 'ro')
-    plt.plot(x_test.reshape(-1), y_test, color='black')
-    plt.axis([-6, 6, -100, 100])
-    # plt.show()
 
     # Standardize data
     x_train, x_test, mean_x_train, std_x_train = dataset.standardize(x_train, x_test)
@@ -131,7 +138,6 @@ if __name__ == '__main__':
     variational = mean_field_variational(layer_sizes, n_particles)
     qw_outputs = variational.query(w_names, outputs=True, local_log_prob=True)
     latent = dict(zip(w_names, qw_outputs))
-
     lower_bound = tf.reduce_mean(
         zs.advi(log_joint, {'y': y_obs}, latent, axis=0))
 
@@ -145,9 +151,6 @@ if __name__ == '__main__':
     observed.update({'y': y_obs})
     model, y_mean = bayesianNN(observed, x, n_x, layer_sizes, n_particles)
     y_pred = tf.reduce_mean(y_mean, 0)
-    y_var = tf.sqrt(tf.reduce_mean(y_mean * y_mean, 0) - \
-            tf.reduce_mean(y_mean, 0) * tf.reduce_mean(y_mean, 0)) \
-            * tf.convert_to_tensor(std_y_train, dtype=tf.float32)
     rmse = tf.sqrt(tf.reduce_mean((y_pred - y) ** 2)) * \
            tf.convert_to_tensor(std_y_train, dtype=tf.float32)
     log_py_xw = model.local_log_prob('y')
@@ -167,31 +170,16 @@ if __name__ == '__main__':
             if epoch % anneal_lr_freq == 0:
                 learning_rate *= anneal_lr_rate
             lbs = []
-            res = []
             for t in range(iters):
                 x_batch = x_train[t * batch_size:(t + 1) * batch_size]
                 y_batch = y_train[t * batch_size:(t + 1) * batch_size]
-                _, lb, re = sess.run(
-                    [infer, lower_bound, rmse],
+                _, lb = sess.run(
+                    [infer, lower_bound],
                     feed_dict={n_particles: lb_samples,
                                learning_rate_ph: learning_rate,
                                x: x_batch, y: y_batch})
                 lbs.append(lb)
-                res.append(re)
             time_epoch += time.time()
-            print('Epoch {} ({:.1f}s): Lower bound = {}, RMSE = {}'.format(
-                epoch, time_epoch, np.mean(lbs), np.mean(res)))
-        ym, yv, test_re = sess.run([y_pred, y_var, rmse],
-                          feed_dict={n_particles: ll_samples,
-                                     x: x_test,
-                                     y: y_test})
-        print('Test RMSE = {}'.format(test_re))
-        ym = ym.reshape(-1)
-        fx = x_test.reshape(-1) * std_x_train + mean_x_train
-        fy = ym * std_y_train + mean_y_train
-        fyl = fy - yv
-        fyh = fy + yv
-        plt.plot(fx, fy, color='red')
-        plt.fill_between(fx, fyl, fyh, where=fyl < fyh,
-                         facecolor='grey', interpolate=True)
-        plt.show()
+            print('Epoch {} ({:.1f}s): Lower bound = {}'.format(
+                epoch, time_epoch, np.mean(lbs)))
+

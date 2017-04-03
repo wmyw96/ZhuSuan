@@ -11,6 +11,7 @@ import time
 import tensorflow as tf
 from six.moves import range, zip
 import numpy as np
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import zhusuan as zs
 
@@ -44,7 +45,7 @@ def bayesianNN(observed, x, n_x, layer_sizes, n_particles):
         y_mean = tf.squeeze(ly_x, [2, 3])
         y_logstd = tf.get_variable('y_logstd', shape=[],
                                    initializer=tf.constant_initializer(0.))
-        #y_logstd = tf.log(1.0)
+        # y_logstd = tf.log(1.0)
         y = zs.Normal('y', y_mean, y_logstd)
 
     return model, y_mean
@@ -93,7 +94,8 @@ if __name__ == '__main__':
     # plt.show()
 
     # Standardize data
-    x_train, x_test, mean_x_train, std_x_train = dataset.standardize(x_train, x_test)
+    x_train, x_test, mean_x_train, std_x_train = dataset.standardize(x_train,
+                                                                     x_test)
     y_train, y_test, mean_y_train, std_y_train = dataset.standardize(
         y_train.reshape((-1, 1)), y_test.reshape((-1, 1)))
     y_train, y_test = y_train.squeeze(), y_test.squeeze()
@@ -121,12 +123,14 @@ if __name__ == '__main__':
     layer_sizes = [n_x] + n_hiddens + [1]
     w_names = ['w' + str(i) for i in range(len(layer_sizes) - 1)]
 
+
     def log_joint(observed):
         model, _ = bayesianNN(observed, x, n_x, layer_sizes, n_particles)
         log_pws = model.local_log_prob(w_names)
         log_py_xw = model.local_log_prob('y')
         return tf.add_n(log_pws) + tf.reduce_mean(log_py_xw, 1,
                                                   keep_dims=True) * N
+
 
     variational = mean_field_variational(layer_sizes, n_particles)
     qw_outputs = variational.query(w_names, outputs=True, local_log_prob=True)
@@ -146,7 +150,7 @@ if __name__ == '__main__':
     model, y_mean = bayesianNN(observed, x, n_x, layer_sizes, n_particles)
     y_pred = tf.reduce_mean(y_mean, 0)
     y_var = tf.sqrt(tf.reduce_mean(y_mean * y_mean, 0) - \
-            tf.reduce_mean(y_mean, 0) * tf.reduce_mean(y_mean, 0)) \
+                    tf.reduce_mean(y_mean, 0) * tf.reduce_mean(y_mean, 0)) \
             * tf.convert_to_tensor(std_y_train, dtype=tf.float32)
     rmse = tf.sqrt(tf.reduce_mean((y_pred - y) ** 2)) * \
            tf.convert_to_tensor(std_y_train, dtype=tf.float32)
@@ -182,9 +186,9 @@ if __name__ == '__main__':
             print('Epoch {} ({:.1f}s): Lower bound = {}, RMSE = {}'.format(
                 epoch, time_epoch, np.mean(lbs), np.mean(res)))
         ym, yv, test_re = sess.run([y_pred, y_var, rmse],
-                          feed_dict={n_particles: ll_samples,
-                                     x: x_test,
-                                     y: y_test})
+                                   feed_dict={n_particles: ll_samples,
+                                              x: x_test,
+                                              y: y_test})
         print('Test RMSE = {}'.format(test_re))
         ym = ym.reshape(-1)
         fx = x_test.reshape(-1) * std_x_train + mean_x_train
