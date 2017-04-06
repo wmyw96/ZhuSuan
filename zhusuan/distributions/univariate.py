@@ -477,7 +477,8 @@ class Gamma(Distribution):
                                          self.beta.get_shape())
 
     def _sample(self, n_samples):
-        return tf.random_gamma([n_samples], self.alpha, beta=self.beta)
+        samples = tf.random_gamma([n_samples], self.alpha, beta=1)
+        return samples / self.beta
 
     def _log_prob(self, given):
         alpha, beta = self.alpha, self.beta

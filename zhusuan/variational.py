@@ -48,9 +48,10 @@ def sgvb(log_joint, observed, latent, axis=None):
     latent_outputs = dict(zip(latent_k, map(lambda x: x[0], latent_v)))
     latent_logpdfs = map(lambda x: x[1], latent_v)
     joint_obs = merge_dicts(observed, latent_outputs)
-    lower_bound = log_joint(joint_obs) - sum(latent_logpdfs)
+    joint_prob, likelihood = log_joint(joint_obs)
+    lower_bound = joint_prob - sum(latent_logpdfs)
     lower_bound = tf.reduce_mean(lower_bound, axis)
-    reconstruction = log_joint(joint_obs)
+    reconstruction = likelihood
     reconstruction = tf.reduce_mean(reconstruction, axis)
     return lower_bound, reconstruction
 
