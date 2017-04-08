@@ -81,16 +81,14 @@ if __name__ == '__main__':
     np.random.seed(1234)
 
     # Load UCI Boston housing data
-    # Load toy data set
-    x_train, y_train = toy_data(20)
-    x_test = np.arange(-6, 6, 0.01).reshape((-1, 1))
-    y_test = x_test * x_test * x_test
-    y_test = y_test.reshape((-1))
+    data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             'data', 'housing.data')
+    x_train, y_train, x_valid, y_valid, x_test, y_test = \
+        dataset.load_uci_boston_housing(data_path)
+    x_train = np.vstack([x_train, x_valid]).astype('float32')
+    y_train = np.hstack([y_train, y_valid]).astype('float32')
+    x_test = x_test.astype('float32')
     N, n_x = x_train.shape
-    plt.plot(x_train.reshape(-1), y_train, 'ro')
-    plt.plot(x_test.reshape(-1), y_test, color='black')
-    plt.axis([-6, 6, -100, 100])
-    # plt.show()
 
     # Standardize data
     x_train, x_test, mean_x_train, std_x_train = dataset.standardize(x_train, x_test)

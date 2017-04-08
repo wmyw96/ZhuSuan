@@ -180,8 +180,8 @@ def bayesianNN(observed, x, n_x, layer_sizes, n_particles, y_sd):
         y_std = tf.get_variable('y_logstd', shape=[],
                                    initializer=tf.constant_initializer(1.))
         y_log_std = tf.log(y_std)
-        log_y_sd = tf.log(tf.convert_to_tensor(y_sd, dtype=tf.float32))
-        y = zs.Normal('y', y_mean, log_y_sd)
+        #log_y_sd = tf.log(tf.convert_to_tensor(, dtype=tf.float32))
+        y = zs.Normal('y', y_mean, -2.3)
 
     return model, y_mean, y_std
 
@@ -282,8 +282,8 @@ if __name__ == '__main__':
         name = key
         qsample = value[0]
         qlog_prob = value[1]
-        qsample, qlog_prob = matrixiaf(name, qsample, None, qlog_prob,
-                                       made, 5, update='gru')
+        #qsample, qlog_prob = matrixiaf(name, qsample, None, qlog_prob,
+        #                               made, 5, update='gru')
         #qsample, qlog_prob = flat_flow(qsample, None, qlog_prob)
         va = tf.reduce_mean(qsample * qsample, [-1, -2])
         tot = tot + 1

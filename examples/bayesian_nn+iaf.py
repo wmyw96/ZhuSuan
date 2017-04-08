@@ -197,9 +197,9 @@ def train_init(seed1, seed2, id):
 
     # Load UCI Boston housing data
     data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             'data', 'bow.data')
+                             'data', 'housing.data')
     x_train, y_train, x_valid, y_valid, x_test, y_test = \
-        dataset.load_uci_bow(data_path)
+        dataset.load_uci_boston_housing(data_path)
     x_train = np.vstack([x_train, x_valid]).astype('float32')
     y_train = np.hstack([y_train, y_valid]).astype('float32')
     x_test = x_test.astype('float32')
@@ -253,7 +253,7 @@ def train_init(seed1, seed2, id):
         name = key
         qsample = value[0]
         qlog_prob = value[1]
-        qsample, qlog_prob = matrixiaf(name, qsample, hidden[name], qlog_prob, zs.linear_ar, 1, update='normal')
+        qsample, qlog_prob = matrixiaf(name, qsample, hidden[name], qlog_prob, z, 1, update='normal')
         latentf[name] = [qsample, qlog_prob]
     # latentf = latent
 
@@ -325,9 +325,9 @@ def repeat_train(seed1, seed2, id, lower_bound, infer, log_likelihood, rmse, n_p
 
     # Load UCI Boston housing data
     data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             'data', 'bow.data')
+                             'data', 'housing.data')
     x_train, y_train, x_valid, y_valid, x_test, y_test = \
-        dataset.load_uci_bow(data_path)
+        dataset.load_uci_boston_housing(data_path)
     x_train = np.vstack([x_train, x_valid]).astype('float32')
     y_train = np.hstack([y_train, y_valid]).astype('float32')
     x_test = x_test.astype('float32')

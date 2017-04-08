@@ -18,9 +18,7 @@ import dataset
 import matplotlib.pyplot as plt
 
 
-tau_mean0 = -2.3
-tau_log_std0 = 0.0
-lda_mean0 = 0.0
+lda_mean0 = 4.0
 lda_log_std0 = 0.0
 
 
@@ -147,33 +145,16 @@ def matrixiaf(name, sample, hidden, log_prob, autoregressiveNN, iters, update='n
 @zs.reuse('model')
 def bayesianNN(observed, x, n_x, layer_sizes, n_particles):
     with zs.BayesianNet(observed=observed) as model:
-        tau_mean = tf.convert_to_tensor([tau_mean0], dtype=tf.float32)
-        tau_log_std = tf.convert_to_tensor([tau_log_std0], dtype=tf.float32)
-
-        lda_mean = tf.convert_to_tensor([lda_mean0], dtype=tf.float32)
-        lda_log_std = tf.convert_to_tensor([lda_log_std0], dtype=tf.float32)
-
-        tau = zs.Normal('tau', tau_mean, tau_log_std,
-                        n_samples=n_particles, group_event_ndims=0)
-        lda = zs.Normal('lda', lda_mean, lda_log_std,
-                        n_samples=n_particles, group_event_ndims=0)
-        lda = tf.expand_dims(tf.expand_dims(lda, 2), 3)
         ws = []
         for i, (n_in, n_out) in enumerate(zip(layer_sizes[:-1],
                                               layer_sizes[1:])):
-            w_mu = tf.zeros([n_particles, 1, n_out, n_in + 1])
-            w_logstd = tf.ones([n_particles, 1,
-                                n_out, n_in + 1]) * lda
-            # [n_particles, 1, n_out, n_in + 1]
+            w_mu = tf.zeros([1, n_out, n_in + 1])
+            w_logstd = tf.ones([1, n_out, n_in + 1]) * tf.log(10.0)
             ws.append(zs.Normal('w' + str(i), w_mu, w_logstd,
-                                n_samples=None, group_event_ndims=2))
-        # forward
-        # ?[(0), (1), (2), (3)]
-        # [n_particles, N, n_x, 1]
+                                n_samples=n_particles, group_event_ndims=2))
         ly_x = tf.expand_dims(
             tf.tile(tf.expand_dims(x, 0), [n_particles, 1, 1]), 3)
         for i in range(len(ws)):
-            # [n_particles, N, n_out, n_in + 1]
             w = tf.tile(ws[i], [1, tf.shape(x)[0], 1, 1])
             ly_x = tf.concat(
                 [ly_x, tf.ones([n_particles, tf.shape(x)[0], 1, 1])], 2)
@@ -183,12 +164,12 @@ def bayesianNN(observed, x, n_x, layer_sizes, n_particles):
                 ly_x = tf.nn.relu(ly_x)
 
         y_mean = tf.squeeze(ly_x, [2, 3])
-        y = zs.Normal('y', y_mean, tau)
+        y = zs.Normal('y', y_mean, tf.log(0.27))
 
-    return model, y_mean, tf.reduce_mean(tau)
+    return model, y_mean
 
 
-def mean_field_variational(data_size, x, y_obs, n_x, layer_sizes, n_particles):
+def mean_field_variational(x, y_obs, n_x, layer_sizes, n_particles):
     with zs.BayesianNet() as variational:
         ws = []
         for i, (n_in, n_out) in enumerate(zip(layer_sizes[:-1],
@@ -202,70 +183,42 @@ def mean_field_variational(data_size, x, y_obs, n_x, layer_sizes, n_particles):
             ws.append(
                 zs.Normal('w' + str(i), w_mean, w_logstd,
                           n_samples=n_particles, group_event_ndims=2))
-        tau_mean = tf.get_variable('tau_mean', shape=[1],
-                                   initializer=
-                                   tf.constant_initializer(tau_mean0))
-        tau_log_std = tf.get_variable('tau_log_std', shape=[1],
-                                      initializer=
-                                      tf.constant_initializer(tau_log_std0))
-        tau = zs.Normal('tau', tau_mean, tau_log_std,
-                        n_samples=n_particles, group_event_ndims=0)
-        lda_mean = tf.get_variable('lda_mean', shape=[1],
-                                   initializer=
-                                   tf.constant_initializer(lda_mean0))
-        lda_log_std = tf.get_variable('lda_log_std', shape=[1],
-                                      initializer=
-                                      tf.constant_initializer(lda_log_std0))
-        lda = zs.Normal('lda', lda_mean, lda_log_std,
-                        n_samples=n_particles, group_event_ndims=0)
 
-    return variational, tf.reduce_mean(tau)
+    return variational
 
 
-def toy_data(data_size):
-    x = np.random.uniform(-4, 4, data_size)
-    epsilon = np.random.normal(0, 3, data_size)
-    y = x * x * x + epsilon
-    x = x.reshape((data_size, 1))
-    y = y.reshape((data_size))
-    return x, y
+def train_init(seed1, seed2, id):
+    tf.set_random_seed(seed1)
+    np.random.seed(seed2)
 
-
-if __name__ == '__main__':
-    tf.set_random_seed(1237)
-    np.random.seed(1234)
-
-    data_size = 20
     # Load UCI Boston housing data
-    # Load toy data set
-    x_train, y_train = toy_data(data_size)
-    x_test = np.arange(-6, 6, 0.01).reshape((-1, 1))
-    y_test = x_test * x_test * x_test
-    y_test = y_test.reshape((-1))
+    data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             'data', 'housing.data')
+    x_train, y_train, x_valid, y_valid, x_test, y_test = \
+        dataset.load_uci_boston_housing(data_path)
+    x_train = np.vstack([x_train, x_valid]).astype('float32')
+    y_train = np.hstack([y_train, y_valid]).astype('float32')
+    x_test = x_test.astype('float32')
     N, n_x = x_train.shape
-    plt.plot(x_train.reshape(-1), y_train, 'ro')
-    plt.plot(x_test.reshape(-1), y_test, color='black')
-    plt.axis([-6, 6, -100, 100])
-    # plt.show()
+
+    print('Totally %d data' % N)
 
     # Standardize data
     x_train, x_test, mean_x_train, std_x_train = dataset.standardize(x_train,
                                                                      x_test)
     y_train, y_test, mean_y_train, std_y_train = dataset.standardize(
         y_train.reshape((-1, 1)), y_test.reshape((-1, 1)))
-    y_sd = 3 / std_y_train
-    print(y_sd)
     y_train, y_test = y_train.squeeze(), y_test.squeeze()
     std_y_train = std_y_train.squeeze()
 
     # Define model parameters
-    n_hiddens = [100]
+    n_hiddens = [50]
 
     # Define training/evaluation parameters
-    lb_samples = 20
+    lb_samples = 10
     ll_samples = 1000
     epoches = 500
-    batch_size = 5
+    batch_size = 10
     iters = int(np.floor(x_train.shape[0] / float(batch_size)))
     test_freq = 10
     learning_rate = 0.01
@@ -274,7 +227,6 @@ if __name__ == '__main__':
 
     # Build the computation graph
     n_particles = tf.placeholder(tf.int32, shape=[], name='n_particles')
-    #n_particles = 5
     x = tf.placeholder(tf.float32, shape=[None, n_x])
     y = tf.placeholder(tf.float32, shape=[None])
     y_obs = tf.tile(tf.expand_dims(y, 0), [n_particles, 1])
@@ -282,23 +234,17 @@ if __name__ == '__main__':
     w_names = ['w' + str(i) for i in range(len(layer_sizes) - 1)]
 
     def log_joint(observed):
-        model, _, _ = bayesianNN(observed, x, n_x, layer_sizes, n_particles)
-        log_tau = model.local_log_prob(['tau'])
+        model, _ = bayesianNN(observed, x, n_x, layer_sizes, n_particles)
         log_pws = model.local_log_prob(w_names)
-        print(tf.add_n(log_pws).get_shape())
         log_py_xw = model.local_log_prob('y')
-        return log_tau + tf.add_n(log_pws) + \
+        return tf.add_n(log_pws) + \
                tf.reduce_mean(log_py_xw, 1, keep_dims=True) * N, \
                tf.reduce_mean(log_py_xw, 1, keep_dims=True) * N
 
-    variational, v_tau = mean_field_variational(data_size, x, y_obs, n_x, layer_sizes, n_particles)
+    variational = mean_field_variational(x, y_obs, n_x, layer_sizes, n_particles)
     qw_outputs = variational.query(w_names, outputs=True, local_log_prob=True)
-    tau_samples, tau_log_probs = variational.query('tau', outputs=True,
-                                                   local_log_prob=True)
-    lda_samples, lda_log_probs = variational.query('lda', outputs=True,
-                                                   local_log_prob=True)
     latent = dict(zip(w_names, qw_outputs))
-    '''
+
     # add flow for bnn
     latentf = {}
     tot = 0
@@ -316,12 +262,9 @@ if __name__ == '__main__':
     tva = sum(valist) / len(valist)
     tva = tf.reduce_mean(tva, [0, 1])
     latent = latentf
-    '''
 
-    latent.update({'tau': [tau_samples, tau_log_probs]})
-    latent.update({'lda': [lda_samples, lda_log_probs]})
     for key in latent:
-        print('latent %s' % key)
+        print('model: latent %s' % key)
 
     lower_bound, reconstruction = \
         zs.sgvb(log_joint, {'y': y_obs}, latent, axis=0)
@@ -336,7 +279,7 @@ if __name__ == '__main__':
     # prediction: rmse & log likelihood
     observed = dict((w_name, latent[w_name][0]) for w_name in w_names)
     observed.update({'y': y_obs})
-    model, y_mean, para_std = bayesianNN(observed, x, n_x, layer_sizes, n_particles)
+    model, y_mean = bayesianNN(observed, x, n_x, layer_sizes, n_particles)
     y_pred = tf.reduce_mean(y_mean, 0)
     y_var = tf.sqrt(tf.reduce_mean(y_mean * y_mean, 0) - \
                     tf.reduce_mean(y_mean, 0) * tf.reduce_mean(y_mean, 0)) \
@@ -352,6 +295,7 @@ if __name__ == '__main__':
     for i in params:
         print(i.name, i.get_shape())
 
+    report = 0.0
     # Run the inference
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
@@ -362,41 +306,154 @@ if __name__ == '__main__':
             lbs = []
             res = []
             errs = []
-            pcns = []
-            #vas = []
             for t in range(iters):
                 x_batch = x_train[t * batch_size:(t + 1) * batch_size]
                 y_batch = y_train[t * batch_size:(t + 1) * batch_size]
-                _, lb, re, error, pcn = sess.run(
-                    [infer, lower_bound, rmse, reconstruction, v_tau],
+                _, lb, re, error = sess.run(
+                    [infer, lower_bound, rmse, reconstruction],
                     feed_dict={n_particles: lb_samples,
                                learning_rate_ph: learning_rate,
                                x: x_batch, y: y_batch})
                 lbs.append(lb)
                 res.append(re)
                 errs.append(error)
-                pcns.append(pcn)
-                #vas.append(va)
             time_epoch += time.time()
             print('Epoch {} ({:.1f}s): Lower bound = {}, RMSE = {}, '
-                  'RC ERROR = {}, KL = {}, Precision = {}'.format(epoch,
+                  'RC ERROR = {}, KL = {}'.format(epoch,
                                          time_epoch,
                                          np.mean(lbs),
                                          np.mean(res),
                                          np.mean(errs),
-                                         np.mean(errs) - np.mean(lbs),
-                                         np.mean(pcns)))
-        ym, yv, test_re, sd = sess.run([y_pred, y_var, rmse, para_std],
-                                   feed_dict={n_particles: ll_samples,
-                                              x: x_test,
-                                              y: y_test})
-        print('Test RMSE = {}, PARA std = {}'.format(test_re, sd))
-        ym = ym.reshape(-1)
-        fx = x_test.reshape(-1) * std_x_train + mean_x_train
-        fy = ym * std_y_train + mean_y_train
-        fyl = fy - 3 * yv
-        fyh = fy + 3 * yv
-        plt.plot(fx, fy, color='red')
-        plt.fill_between(fx, fyl, fyh, where=fyl < fyh,
-                         facecolor='grey', interpolate=True)
-        plt.show()
+                                         np.mean(errs) - np.mean(lbs)))
+            if epoch % test_freq == 0:
+                time_test = -time.time()
+                test_lb, test_rmse, test_ll = sess.run(
+                    [lower_bound, rmse, log_likelihood],
+                    feed_dict={n_particles: ll_samples,
+                               x: x_test, y: y_test})
+                time_test += time.time()
+                print('>>> TEST ({:.1f}s)'.format(time_test))
+                print('>> Test lower bound = {}'.format(test_lb))
+                print('>> Test rmse = {}'.format(test_rmse))
+                print('>> Test log_likelihood = {}'.format(test_ll))
+                report = test_rmse
+    print('Test #{}: rmse {}'.format(id, report))
+    return report, lower_bound, infer, log_likelihood, rmse, n_particles, \
+           x, y, learning_rate_ph, reconstruction
+
+
+
+def repeat_train(seed1, seed2, id, lower_bound, infer, log_likelihood, rmse,
+                 n_particles, x, y, learning_rate_ph, reconstruction):
+    tf.set_random_seed(seed1)
+    np.random.seed(seed2)
+
+    # Load UCI Boston housing data
+    data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             'data', 'housing.data')
+    x_train, y_train, x_valid, y_valid, x_test, y_test = \
+        dataset.load_uci_boston_housing(data_path)
+    x_train = np.vstack([x_train, x_valid]).astype('float32')
+    y_train = np.hstack([y_train, y_valid]).astype('float32')
+    x_test = x_test.astype('float32')
+    N, n_x = x_train.shape
+
+    # Standardize data
+    x_train, x_test, _, _ = dataset.standardize(x_train, x_test)
+    y_train, y_test, mean_y_train, std_y_train = dataset.standardize(
+        y_train.reshape((-1, 1)), y_test.reshape((-1, 1)))
+    y_train, y_test = y_train.squeeze(), y_test.squeeze()
+    std_y_train = std_y_train.squeeze()
+
+    # Define model parameters
+    n_hiddens = [50]
+
+    # Define training/evaluation parameters
+    lb_samples = 10
+    ll_samples = 5000
+    epoches = 500
+    batch_size = 10
+    iters = int(np.floor(x_train.shape[0] / float(batch_size)))
+    test_freq = 10
+    learning_rate = 0.01
+    anneal_lr_freq = 100
+    anneal_lr_rate = 0.75
+
+    # Run the inference
+    with tf.Session() as sess:
+        sess.run(tf.global_variables_initializer())
+        for epoch in range(1, epoches + 1):
+            time_epoch = -time.time()
+            if epoch % anneal_lr_freq == 0:
+                learning_rate *= anneal_lr_rate
+            lbs = []
+            res = []
+            errs = []
+            for t in range(iters):
+                x_batch = x_train[t * batch_size:(t + 1) * batch_size]
+                y_batch = y_train[t * batch_size:(t + 1) * batch_size]
+                _, lb, re, error = sess.run(
+                    [infer, lower_bound, rmse, reconstruction],
+                    feed_dict={n_particles: lb_samples,
+                               learning_rate_ph: learning_rate,
+                               x: x_batch, y: y_batch})
+                lbs.append(lb)
+                res.append(re)
+                errs.append(error)
+            time_epoch += time.time()
+            print('Epoch {} ({:.1f}s): Lower bound = {}, RMSE = {}, '
+                  'RC ERROR = {}, KL = {}'.format(epoch,
+                                         time_epoch,
+                                         np.mean(lbs),
+                                         np.mean(res),
+                                         np.mean(errs),
+                                         np.mean(errs) - np.mean(lbs)))
+        if epoch % test_freq == 0:
+            time_test = -time.time()
+            test_lb, test_rmse, test_ll = sess.run(
+                [lower_bound, rmse, log_likelihood],
+                feed_dict={n_particles: ll_samples,
+                           x: x_test, y: y_test})
+            time_test += time.time()
+            print('>>> TEST ({:.1f}s)'.format(time_test))
+            print('>> Test lower bound = {}'.format(test_lb))
+            print('>> Test rmse = {}'.format(test_rmse))
+            print('>> Test log_likelihood = {}'.format(test_ll))
+            report = test_rmse
+    print('Test #{}: rmse {}'.format(id, report))
+    return report
+
+
+def mean(x):
+    return sum(x) / len(x)
+
+def var(x):
+    return (mean([y * y for y in x]) - mean(x)**2) * (len(x) - 1) / (len(x))
+
+if __name__ == '__main__':
+    seed1s = [453984654, 61091275, 135739564, 57753681, 1590583398,
+              322125691, 2878925, 585532197, 1263194847, 161388631,
+              1282947, 1376245555, 437867716, 395760231, 91762683,
+              1598292627, 175899168, 965163183, 775262922, 2304164600]
+    seed2s = [1317197089, 1324626939, 1518482692, 825093942, 1080703132,
+              404980495, 650835793, 1329094812, 2230122952, 688158692,
+              1114101288, 587632284, 748845643, 70939275, 659735203,
+              278172623, 1411640455, 1122980651, 1779186117, 230143089]
+
+    pair = train_init(seed1s[0], seed2s[0], 0)
+    rmse = [pair[0]]
+    lb = pair[1]
+    ifr = pair[2]
+    lll = pair[3]
+    rms = pair[4]
+    npa = pair[5]
+    xx = pair[6]
+    yy = pair[7]
+    lr = pair[8]
+    error = pair[9]
+
+    for i in range(19):
+        rmse = rmse + [repeat_train(seed1s[i + 1], seed2s[i + 1], i + 1, lb,
+                                    ifr, lll, rms, npa, xx, yy, lr, error)]
+    print(rmse)
+    print(np.mean(rmse), np.var(rmse))
