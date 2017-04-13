@@ -15,12 +15,44 @@ from .evaluation import is_loglikelihood
 
 
 __all__ = [
+    'advi',
     'sgvb',
     'iwae',
     'rws',
     'nvil',
     'vimco'
 ]
+
+
+def advi(log_joint, observed, latent, axis=None):
+    """
+    Implements the stochastic gradient variational bayes (SGVB) algorithm
+    from (Kingma, 2013). This only works for continuous latent
+    `StochasticTensor` s that can be reparameterized (Kingma, 2013).
+
+    :param log_joint: A function that accepts a dictionary argument of
+        (str, Tensor) pairs, which are mappings from all `StochasticTensor`
+        names in the model to their observed values. The function should
+        return a Tensor, representing the log joint likelihood of the model.
+    :param observed: A dictionary of (str, Tensor) pairs. Mapping from names
+        of observed `StochasticTensor` s to their values
+    :param latent: A dictionary of (str, (Tensor, Tensor)) pairs. Mapping
+        from names of latent `StochasticTensor` s to their samples and log
+        probabilities.
+    :param axis: The sample dimension(s) to reduce when computing the
+        outer expectation in variational lower bound. If `None`, no dimension
+        is reduced.
+
+    :return: A Tensor. The variational lower bound.
+    """
+    latent_k, latent_v = map(list, zip(*six.iteritems(latent)))
+    latent_outputs = dict(zip(latent_k, map(lambda x: x[0], latent_v)))
+    latent_logpdfs = map(lambda x: x[1], latent_v)
+    joint_obs = merge_dicts(observed, latent_outputs)
+    joint_prob = log_joint(joint_obs)
+    lower_bound = joint_prob - sum(latent_logpdfs)
+    lower_bound = tf.reduce_mean(lower_bound, axis)
+    return lower_bound
 
 
 def sgvb(log_joint, observed, latent, axis=None):
