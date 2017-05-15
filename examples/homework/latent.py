@@ -4,6 +4,7 @@
 from __future__ import absolute_import
 from __future__ import print_function
 from __future__ import division
+import sys
 import os
 import time
 
@@ -11,30 +12,35 @@ import tensorflow as tf
 from tensorflow.contrib import layers
 from six.moves import range
 import numpy as np
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import zhusuan as zs
 
 from examples import conf
-from examples.utils import dataset
-
+from examples.utils import dataset, save_image_collections
 
 @zs.reuse('model')
-def vae(observed, n, n_x, n_z, n_particles, is_training):
+def factor(observed, n, cls, n_x, n_particles, is_training):
     with zs.BayesianNet(observed=observed) as model:
-        normalizer_params = {'is_training': is_training,
-                             'updates_collections': None}
         z_mean = tf.zeros([n, n_z])
         z_logstd = tf.zeros([n, n_z])
+        # [n_particles, n, n_z]
         z = zs.Normal('z', z_mean, z_logstd, n_samples=n_particles,
                       group_event_ndims=1)
-        lx_z = layers.fully_connected(
-            z, 500, normalizer_fn=layers.batch_norm,
-            normalizer_params=normalizer_params)
-        lx_z = layers.fully_connected(
-            lx_z, 500, normalizer_fn=layers.batch_norm,
-            normalizer_params=normalizer_params)
-        x_logits = layers.fully_connected(lx_z, n_x, activation_fn=None)
-        x = zs.Bernoulli('x', x_logits, group_event_ndims=1)
-    return model
+        # [n_x, n_z]
+        L = tf.get_variable('L', shape=[n_x, n_z],
+                            initializer=tf.random_normal_initializer(0, 0.05))
+        L = tf.tile(tf.expand_dims(L, 0), [n_particles, 1, 1])
+        x_mean = tf.get_variable('x_mean', shape=[1, 1, n_x],
+                                 initializer=tf.random_normal_initializer(
+                                     0, 0.05))
+        x_mean = tf.tile(x_mean, [n_particles, n, 1])
+        x_logstd = tf.get_variable('x_logstd', shape=[1, 1, n_x],
+                                   initializer=tf.random_normal_initializer(
+                                       0, 0.05))
+        x_logstd = tf.tile(x_logstd, [n_particles, n, 1])
+        mean = tf.matmul(z, L, transpose_b = True) + x_mean
+        x = zs.Normal('x', mean, x_logstd, group_event_ndims=1)
+    return model, x
 
 
 @zs.reuse('variational')
@@ -48,31 +54,34 @@ def q_net(observed, x, n_z, n_particles, is_training):
         lz_x = layers.fully_connected(
             lz_x, 500, normalizer_fn=layers.batch_norm,
             normalizer_params=normalizer_params)
-        z_mean = layers.fully_connected(lz_x, n_z, activation_fn=None)
-        z_logstd = layers.fully_connected(lz_x, n_z, activation_fn=None)
-        z = zs.Normal('z', z_mean, z_logstd, n_samples=n_particles,
+        lz_mean = layers.fully_connected(lz_x, n_z, activation_fn=None)
+        lz_logstd = layers.fully_connected(lz_x, n_z, activation_fn=None)
+        z = zs.Normal('z', lz_mean, lz_logstd, n_samples=n_particles,
                       group_event_ndims=1)
     return variational
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     tf.set_random_seed(1237)
 
     # Load MNIST
     data_path = os.path.join(conf.data_dir, 'mnist.pkl.gz')
     x_train, t_train, x_valid, t_valid, x_test, t_test = \
-        dataset.load_mnist_realval(data_path)
+        dataset.load_mnist_realval(data_path, dequantify=True)
+
     x_train = np.vstack([x_train, x_valid]).astype('float32')
+    x_train = np.minimum(x_train, 1 - 1.0/256)
+    x_train = np.maximum(x_train, 1.0/256)
+    x_test = np.minimum(x_test, 1 - 1.0/256)
+    x_test = np.maximum(x_test, 1.0/256)
+    x_train = -np.log(1 / x_train - 1)
+    x_test = -np.log(1 / x_test - 1)
     np.random.seed(1234)
-    x_test = np.random.binomial(1, x_test, size=x_test.shape).astype('float32')
     n_x = x_train.shape[1]
 
-    # Define model parameters
     n_z = 40
-
-    # Define training/evaluation parameters
-    lb_samples = 10
-    ll_samples = 1000
+    lb_samples = 2
+    ll_samples = 100
     epoches = 3000
     batch_size = 100
     iters = x_train.shape[0] // batch_size
@@ -83,30 +92,35 @@ if __name__ == "__main__":
     test_batch_size = 400
     test_iters = x_test.shape[0] // test_batch_size
     save_freq = 100
+    image_freq = 2
     result_path = "results/vae"
 
-    # Build the computation graph
     is_training = tf.placeholder(tf.bool, shape=[], name='is_training')
     n_particles = tf.placeholder(tf.int32, shape=[], name='n_particles')
     x_orig = tf.placeholder(tf.float32, shape=[None, n_x], name='x')
     x_bin = tf.cast(tf.less(tf.random_uniform(tf.shape(x_orig), 0, 1), x_orig),
-                    tf.int32)
-    x = tf.placeholder(tf.int32, shape=[None, n_x], name='x')
+                    tf.float32)
+    x = tf.placeholder(tf.float32, shape=[None, n_x], name='x')
     x_obs = tf.tile(tf.expand_dims(x, 0), [n_particles, 1, 1])
     n = tf.shape(x)[0]
 
     def log_joint(observed):
-        model = vae(observed, n, n_x, n_z, n_particles, is_training)
+        model, _ = factor(observed, n, n_x, n_z, n_particles, is_training)
         log_pz, log_px_z = model.local_log_prob(['z', 'x'])
         return log_pz + log_px_z
 
     variational = q_net({}, x, n_z, n_particles, is_training)
     qz_samples, log_qz = variational.query('z', outputs=True,
                                            local_log_prob=True)
+
     lower_bound = tf.reduce_mean(
         zs.sgvb(log_joint, {'x': x_obs}, {'z': [qz_samples, log_qz]}, axis=0))
 
-    # Importance sampling estimates of marginal log likelihood
+    # DEBUG
+    #model = factor({'x': x_obs}, n, n_x, n_z, n_particles, is_training)
+    #lj = tf.reduce_mean(model.local_log_prob(['z']))
+    # END DEBUG
+
     is_log_likelihood = tf.reduce_mean(
         zs.is_loglikelihood(log_joint, {'x': x_obs},
                             {'z': [qz_samples, log_qz]}, axis=0))
@@ -122,7 +136,10 @@ if __name__ == "__main__":
 
     saver = tf.train.Saver(max_to_keep=10)
 
-    # Run the inference
+    n_gen = 100
+    _, x_logits = factor({}, n_gen, n_x, n_z, 1, is_training=False)
+    x_gen = tf.reshape(tf.sigmoid(x_logits), [-1, 28, 28, 1])
+
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
 
@@ -140,11 +157,11 @@ if __name__ == "__main__":
                 learning_rate *= anneal_lr_rate
             np.random.shuffle(x_train)
             lbs = []
+            cnt = 0
             for t in range(iters):
                 x_batch = x_train[t * batch_size:(t + 1) * batch_size]
-                x_batch_bin = sess.run(x_bin, feed_dict={x_orig: x_batch})
                 _, lb = sess.run([infer, lower_bound],
-                                 feed_dict={x: x_batch_bin,
+                                 feed_dict={x: x_batch,
                                             learning_rate_ph: learning_rate,
                                             n_particles: lb_samples,
                                             is_training: True})
@@ -185,4 +202,7 @@ if __name__ == "__main__":
                 saver.save(sess, save_path)
                 print('Done')
 
-
+            if epoch % image_freq == 0:
+                images = sess.run(x_gen)
+                name = "results/vae/vae.epoch.{}.png".format(epoch)
+                save_image_collections(images, name)
