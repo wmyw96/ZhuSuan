@@ -1,0 +1,70 @@
+\documentclass{article}
+
+\usepackage{graphicx}
+\usepackage{xeCJK}
+\usepackage{bm}
+\usepackage{amsmath,amsthm,amssymb,amsfonts}
+\usepackage{color}
+\usepackage{geometry}
+\geometry{left=3.2cm,right=3.2cm,top=3.2cm,bottom=3.2cm}
+
+%给文字加颜色，用法:
+%{\color{red}{I love you}}
+
+%\usepackage{ntheorem}
+\newtheorem{them}{定理}[subsection]
+\newtheorem{defn}{定义}[subsection]
+\newtheorem{lemm}{引理}[subsection]
+
+%\setCJKmainfont[BoldFont = 黑体]{宋体}
+%\setlength{\parindent}{2em}
+%如果不要缩进 用\noindent
+\title{Problem Assignment \#3}
+
+\author{Statistical Machine Learning}
+
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Problem 1. 2-D Mixture Gaussian}
+
+\subsection{Model}
+
+生成模型如下
+
+\begin{eqnarray}
+	Z_i &\sim& \mathrm{Discrete}(\pi) \\
+	X_i \lvert Z_i &\sim& \mathcal{N}(\mu_{Z_i}, \sigma^2_{Z_i})
+\end{eqnarray}
+
+其中$Z_i$和$X_i$是随机变量，$\{x_i\}_{i=1}^N$是$X_i$的具体的观测。$\mathrm{Discrete}(x)$为取值为$\{1,2,\cdots,K\}$的随机变量，并且满足$\mathbb{P}(Z_i)=\pi$。$\pi \in \mathbb{R}^K, \mu_i \in \mathbb{R}^D, \sigma^2_i \in \mathbb{R}^D$是需要学习的参数，其中$i \in \{1, 2, \cdots, K\}$。$N$、$K$和$D$是固定的常数，都是正整数。
+
+在此问题中我们固定$D=2$，需要使用variational inference的方法求出参数$\pi \in \mathbb{R}^K, \mu_i \in \mathbb{R}^D, \sigma^2_i \in \mathbb{R}^D$的极大似然估计。
+
+\subsection{Requirements}
+
+代码需要包括：
+
+\begin{itemize}
+	\item [1.] 在ZhuSuan中实现生成模型(model)，并使用你写的模型生成数据(这一部分可以参考vae的教程的生成图像的部分)。
+	\item [2.] 在ZhuSuan中设计合理的variational posterior distribution(q\_net)。
+	\item [3.] 基于ZhuSuan的框架实现整个算法(model-inference-learning)，用[1]步生成的数据进行训练。
+	\item [4.] 对于结果的可视化(可以使用matplotlib)。
+\end{itemize}
+
+报告需要包括：
+
+\begin{itemize}
+	\item [1.] 对于整个问题的形式化描述(按照model-infernece-learning的框架)，尤其是设计的variational posterior distribution的描述与分析。
+	\item [2.] 固定$N=100$, $K=3$，生成数据并完成训练，从数值角度和可视化的角度展示你的结果(需要有具体的图)。
+	\item [*3.] 探讨$N, K$以及参数的真值(比如$\mu_i$之间是否比较近)的变化对你的方法产生结果的影响。
+	\item [*4.] 如果设计了多个variational posterior，比较不同的variational posterior的结果。
+\end{itemize}
+
+关于数据生成：先固定$N$，$D$，$K$，随机生成或者手动选取参数的真值$\pi \in \mathbb{R}^K, \mu_i \in \mathbb{R}^D, \sigma^2_i \in \mathbb{R}^D$，使用生成模型生成$N$组数据$\{x_i\}_{i=1}^N$，在求解极大似然估计的时候应该只用生成的数据$\{x_i\}_{i=1}^N$而“忘记”参数的真值，最后比较极大似然估计的估计值和参数的真值。
+
+
+\end{document}

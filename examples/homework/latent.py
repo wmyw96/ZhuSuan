@@ -14,112 +14,99 @@ from six.moves import range
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import zhusuan as zs
+from matplotlib import pyplot as plt
 
 from examples import conf
 from examples.utils import dataset, save_image_collections
 
+
 @zs.reuse('model')
-def factor(observed, n, cls, n_x, n_particles, is_training):
+def mixture_gaussian(observed, n, n_x, cls, n_particles, is_training):
     with zs.BayesianNet(observed=observed) as model:
-        z_mean = tf.zeros([n, n_z])
-        z_logstd = tf.zeros([n, n_z])
-        # [n_particles, n, n_z]
-        z = zs.Normal('z', z_mean, z_logstd, n_samples=n_particles,
-                      group_event_ndims=1)
-        # [n_x, n_z]
-        L = tf.get_variable('L', shape=[n_x, n_z],
-                            initializer=tf.random_normal_initializer(0, 0.05))
-        L = tf.tile(tf.expand_dims(L, 0), [n_particles, 1, 1])
-        x_mean = tf.get_variable('x_mean', shape=[1, 1, n_x],
-                                 initializer=tf.random_normal_initializer(
-                                     0, 0.05))
-        x_mean = tf.tile(x_mean, [n_particles, n, 1])
-        x_logstd = tf.get_variable('x_logstd', shape=[1, 1, n_x],
+        z_logits = tf.get_variable('z_logits', shape=[1, cls],
                                    initializer=tf.random_normal_initializer(
-                                       0, 0.05))
-        x_logstd = tf.tile(x_logstd, [n_particles, n, 1])
-        mean = tf.matmul(z, L, transpose_b = True) + x_mean
-        x = zs.Normal('x', mean, x_logstd, group_event_ndims=1)
-    return model, x
+                                       0, 1))
+        para = z_logits
+        z_logits = tf.tile(z_logits, [n, 1])
+        z = zs.OnehotCategorical('z', logits=z_logits, n_samples=n_particles,
+                                 group_event_ndims=0, dtype=tf.float32)
+        # [n_particles, n, cls]
+        z = tf.identity(z)
+        x_mean = tf.get_variable('x_mean', shape=[cls, n_x],
+                                 initializer=tf.random_normal_initializer(
+                                     0, 1.0))
+        m_para = x_mean
+        x_logstd = tf.get_variable('x_logstd', shape=[cls, n_x],
+                                   initializer=tf.random_normal_initializer(
+                                        0, 0.1))
+        s_para = x_logstd
+        # [n_particles, cls, n_x]
+        x_mean = tf.tile(tf.expand_dims(x_mean, 0), [n_particles, 1, 1])
+        x_mean = tf.matmul(z, x_mean)
+        x_logstd = tf.tile(tf.expand_dims(x_logstd, 0), [n_particles, 1, 1])
+        x_logstd = tf.matmul(z, x_logstd)
+        x = zs.Normal('x', x_mean, x_logstd, group_event_ndims=1)
+    return model, [tf.squeeze(tf.nn.softmax(para, 1), 0), m_para, s_para], \
+           tf.identity(x)
 
 
 @zs.reuse('variational')
-def q_net(observed, x, n_z, n_particles, is_training):
+def q_net(observed, x, cls, n_particles, is_training):
     with zs.BayesianNet(observed=observed) as variational:
         normalizer_params = {'is_training': is_training,
                              'updates_collections': None}
         lz_x = layers.fully_connected(
-            tf.to_float(x), 500, normalizer_fn=layers.batch_norm,
+            tf.to_float(x), 20, normalizer_fn=layers.batch_norm,
             normalizer_params=normalizer_params)
-        lz_x = layers.fully_connected(
-            lz_x, 500, normalizer_fn=layers.batch_norm,
-            normalizer_params=normalizer_params)
-        lz_mean = layers.fully_connected(lz_x, n_z, activation_fn=None)
-        lz_logstd = layers.fully_connected(lz_x, n_z, activation_fn=None)
-        z = zs.Normal('z', lz_mean, lz_logstd, n_samples=n_particles,
-                      group_event_ndims=1)
+        z_logits = layers.fully_connected(lz_x, cls, activation_fn=None)
+        z = zs.OnehotCategorical('z', z_logits,
+                                 n_samples=n_particles, group_event_ndims=0,
+                                 dtype=tf.float32)
     return variational
 
 
 if __name__ == '__main__':
     tf.set_random_seed(1237)
 
-    # Load MNIST
-    data_path = os.path.join(conf.data_dir, 'mnist.pkl.gz')
-    x_train, t_train, x_valid, t_valid, x_test, t_test = \
-        dataset.load_mnist_realval(data_path, dequantify=True)
-
-    x_train = np.vstack([x_train, x_valid]).astype('float32')
-    x_train = np.minimum(x_train, 1 - 1.0/256)
-    x_train = np.maximum(x_train, 1.0/256)
-    x_test = np.minimum(x_test, 1 - 1.0/256)
-    x_test = np.maximum(x_test, 1.0/256)
-    x_train = -np.log(1 / x_train - 1)
-    x_test = -np.log(1 / x_test - 1)
-    np.random.seed(1234)
-    n_x = x_train.shape[1]
-
-    n_z = 40
-    lb_samples = 2
+    N = 400
+    D = n_x = 2
+    cls = 3
+    lb_samples = 10
     ll_samples = 100
-    epoches = 3000
+    epoches = 1000
     batch_size = 100
-    iters = x_train.shape[0] // batch_size
-    learning_rate = 0.001
-    anneal_lr_freq = 200
+    iters = N // batch_size
+    learning_rate = 0.01
+    anneal_lr_freq = 100
     anneal_lr_rate = 0.75
-    test_freq = 10
-    test_batch_size = 400
-    test_iters = x_test.shape[0] // test_batch_size
     save_freq = 100
     image_freq = 2
-    result_path = "results/vae"
+    result_path = "results/mixture_gaussian"
 
     is_training = tf.placeholder(tf.bool, shape=[], name='is_training')
     n_particles = tf.placeholder(tf.int32, shape=[], name='n_particles')
-    x_orig = tf.placeholder(tf.float32, shape=[None, n_x], name='x')
-    x_bin = tf.cast(tf.less(tf.random_uniform(tf.shape(x_orig), 0, 1), x_orig),
-                    tf.float32)
     x = tf.placeholder(tf.float32, shape=[None, n_x], name='x')
     x_obs = tf.tile(tf.expand_dims(x, 0), [n_particles, 1, 1])
     n = tf.shape(x)[0]
 
     def log_joint(observed):
-        model, _ = factor(observed, n, n_x, n_z, n_particles, is_training)
+        model, _, _ = mixture_gaussian(observed, n, n_x, cls, n_particles,
+                                       is_training)
         log_pz, log_px_z = model.local_log_prob(['z', 'x'])
         return log_pz + log_px_z
 
-    variational = q_net({}, x, n_z, n_particles, is_training)
+    variational = q_net({}, x, cls, n_particles, is_training)
     qz_samples, log_qz = variational.query('z', outputs=True,
                                            local_log_prob=True)
+    print('--')
+    print(qz_samples.get_shape())
+    print(log_qz.get_shape())
+    print('--')
 
-    lower_bound = tf.reduce_mean(
-        zs.sgvb(log_joint, {'x': x_obs}, {'z': [qz_samples, log_qz]}, axis=0))
-
-    # DEBUG
-    #model = factor({'x': x_obs}, n, n_x, n_z, n_particles, is_training)
-    #lj = tf.reduce_mean(model.local_log_prob(['z']))
-    # END DEBUG
+    cost, lower_bound = zs.rws(log_joint, {'x': x_obs},
+                                 {'z': [qz_samples, log_qz]}, axis=0)
+    lower_bound = tf.reduce_mean(lower_bound)
+    cost = tf.reduce_mean(cost)
 
     is_log_likelihood = tf.reduce_mean(
         zs.is_loglikelihood(log_joint, {'x': x_obs},
@@ -127,7 +114,7 @@ if __name__ == '__main__':
 
     learning_rate_ph = tf.placeholder(tf.float32, shape=[], name='lr')
     optimizer = tf.train.AdamOptimizer(learning_rate_ph, epsilon=1e-4)
-    grads = optimizer.compute_gradients(-lower_bound)
+    grads = optimizer.compute_gradients(cost)
     infer = optimizer.apply_gradients(grads)
 
     params = tf.trainable_variables()
@@ -136,11 +123,20 @@ if __name__ == '__main__':
 
     saver = tf.train.Saver(max_to_keep=10)
 
-    n_gen = 100
-    _, x_logits = factor({}, n_gen, n_x, n_z, 1, is_training=False)
-    x_gen = tf.reshape(tf.sigmoid(x_logits), [-1, 28, 28, 1])
-
     with tf.Session() as sess:
+        # generate data
+        sess.run(tf.global_variables_initializer())
+        print(N)
+        _, paras, samples = mixture_gaussian({}, N, D, cls, 1, False)
+        samples = tf.squeeze(samples)
+        true_category, true_mean, true_std, x_train = \
+            sess.run(paras + [samples])
+
+        print(x_train)
+        print(true_category)
+        plt.scatter(x_train[:, 0], x_train[:, 1], s=0.3)
+        plt.scatter(true_mean[:, 0], true_mean[:, 1])
+
         sess.run(tf.global_variables_initializer())
 
         # Restore from the latest checkpoint
@@ -166,43 +162,14 @@ if __name__ == '__main__':
                                             n_particles: lb_samples,
                                             is_training: True})
                 lbs.append(lb)
+            estimate_category, estimate_mean, estimate_std = sess.run(paras)
+            m = np.mean((estimate_mean - true_mean) * (estimate_mean - true_mean))
+            s = np.mean((estimate_std - true_std) * (estimate_std - true_std))
+            print(estimate_category)
             time_epoch += time.time()
-            print('Epoch {} ({:.1f}s): Lower bound = {}'.format(
-                epoch, time_epoch, np.mean(lbs)))
+            print('Epoch {} ({:.1f}s): Lower bound = {}, '
+                  'MSE = {} (mean), {} (log_std)'.format(
+                  epoch, time_epoch, np.mean(lbs), m, s))
 
-            if epoch % test_freq == 0:
-                time_test = -time.time()
-                test_lbs = []
-                test_lls = []
-                for t in range(test_iters):
-                    test_x_batch = x_test[t * test_batch_size:
-                                          (t + 1) * test_batch_size]
-                    test_lb = sess.run(lower_bound,
-                                       feed_dict={x: test_x_batch,
-                                                  n_particles: lb_samples,
-                                                  is_training: False})
-                    test_ll = sess.run(is_log_likelihood,
-                                       feed_dict={x: test_x_batch,
-                                                  n_particles: ll_samples,
-                                                  is_training: False})
-                    test_lbs.append(test_lb)
-                    test_lls.append(test_ll)
-                time_test += time.time()
-                print('>>> TEST ({:.1f}s)'.format(time_test))
-                print('>> Test lower bound = {}'.format(np.mean(test_lbs)))
-                print('>> Test log likelihood (IS) = {}'.format(
-                    np.mean(test_lls)))
-
-            if epoch % save_freq == 0:
-                print('Saving model...')
-                save_path = os.path.join(result_path,
-                                         "vae.epoch.{}.ckpt".format(epoch))
-                if not os.path.exists(os.path.dirname(save_path)):
-                    os.makedirs(os.path.dirname(save_path))
-                saver.save(sess, save_path)
-                print('Done')
-
-            if epoch % image_freq == 0:
-                images = sess.run(x_gen)
-                name = "results/vae/vae.epoch.{}.png".format(epoch)
-                save_image_collections(images, name)
+        plt.scatter(estimate_mean[:, 0], estimate_mean[:, 1], c='r')
+        plt.show()
