@@ -1,2 +1,0 @@
-model_checkpoint_path: "vae.epoch.200.ckpt"
-all_model_checkpoint_paths: "vae.epoch.200.ckpt"

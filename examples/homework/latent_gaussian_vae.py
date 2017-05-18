@@ -25,9 +25,7 @@ def mixture_gaussian_vae(observed, n, n_x, n_h, cls, n_particles, is_training):
     with zs.BayesianNet(observed=observed) as model:
         normalizer_params = {'is_training': is_training,
                              'updates_collections': None}
-        z_logits = tf.get_variable('z_logits', shape=[1, cls],
-                                   initializer=tf.random_normal_initializer(
-                                       0, 0.1))
+        z_logits = tf.zeros([1, cls])
         para = z_logits
         z_logits = tf.tile(z_logits, [n, 1])
         z = zs.OnehotCategorical('z', logits=z_logits, n_samples=n_particles,
@@ -50,7 +48,7 @@ def mixture_gaussian_vae(observed, n, n_x, n_h, cls, n_particles, is_training):
         # [n_particles, n, n_x]
         h = zs.Normal('h', h_mean, h_logstd, group_event_ndims=1)
         lx_h = layers.fully_connected(
-            z, 500, normalizer_fn=layers.batch_norm,
+            h, 500, normalizer_fn=layers.batch_norm,
             normalizer_params=normalizer_params)
         lx_h = layers.fully_connected(
             lx_h, 500, normalizer_fn=layers.batch_norm,
@@ -111,8 +109,8 @@ if __name__ == '__main__':
     test_freq = 10
     test_batch_size = 400
     test_iters = x_test.shape[0] // test_batch_size
-    save_freq = 100
-    image_freq = 2
+    save_freq = 10
+    image_freq = 1
     result_path = "results/mixture_gaussian_vae"
 
     is_training = tf.placeholder(tf.bool, shape=[], name='is_training')
@@ -172,6 +170,18 @@ if __name__ == '__main__':
     _, _, x_logits = mixture_gaussian_vae({}, n_gen, n_x, n_h, cls,
                                           1, is_training=False)
     x_gen = tf.reshape(tf.sigmoid(x_logits), [-1, 28, 28, 1])
+
+    cluster_gen = []
+    for c in range(0, cls):
+        n_gen = 10
+        z_fix = np.zeros((1, n_gen, cls))
+        for j in range(n_gen):
+            z_fix[0, j, c] = 1.0
+        z_fix = tf.constant(z_fix, dtype=tf.float32)
+        _, _, x_logits = mixture_gaussian_vae({'z': z_fix}, n_gen, n_x, n_h,
+                                              cls, 1, is_training=False)
+        cluster_gen.append(tf.reshape(tf.sigmoid(x_logits), [-1, 28, 28, 1]))
+    clu_gen = tf.concat(cluster_gen, 0)
 
     saver = tf.train.Saver(max_to_keep=10)
 
@@ -243,3 +253,12 @@ if __name__ == '__main__':
                 images = sess.run(x_gen)
                 name = "results/mixture_gaussian_vae/vae.epoch.{}.png".format(epoch)
                 save_image_collections(images, name)
+
+                images = sess.run(clu_gen)
+                name = "results/mixture_gaussian_vae/vae.epoch.cluster.png".format(epoch)
+                save_image_collections(images, name)
+                #for i in range(cls):
+                #    images = sess.run(cluster_gen[i])
+                #    name = "results/mixture_gaussian_vae/vae.epoch.{}." \
+                #           "cluster.{}.png".format(epoch, i)
+                #    save_image_collections(images, name)

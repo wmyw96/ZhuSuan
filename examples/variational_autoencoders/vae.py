@@ -51,7 +51,7 @@ def q_net(observed, x, n_z, n_particles, is_training):
         z_mean = layers.fully_connected(lz_x, n_z, activation_fn=None)
         z_logstd = layers.fully_connected(lz_x, n_z, activation_fn=None)
         z = zs.Normal('z', z_mean, z_logstd, n_samples=n_particles,
-                      group_event_ndims=1)
+                      group_event_ndims=1, is_reparameterized=False)
     return variational
 
 
@@ -76,7 +76,7 @@ if __name__ == "__main__":
     epoches = 3000
     batch_size = 100
     iters = x_train.shape[0] // batch_size
-    learning_rate = 0.001
+    learning_rate = 0.003
     anneal_lr_freq = 200
     anneal_lr_rate = 0.75
     test_freq = 10
@@ -103,8 +103,12 @@ if __name__ == "__main__":
     variational = q_net({}, x, n_z, n_particles, is_training)
     qz_samples, log_qz = variational.query('z', outputs=True,
                                            local_log_prob=True)
-    lower_bound = tf.reduce_mean(
-        zs.sgvb(log_joint, {'x': x_obs}, {'z': [qz_samples, log_qz]}, axis=0))
+    cost, lower_bound = \
+        zs.vimco(log_joint, {'x': x_obs}, {'z': [qz_samples, log_qz]}, axis=0)
+    cost = tf.reduce_mean(cost)
+    lower_bound = tf.reduce_mean(lower_bound)
+    #lower_bound = tf.reduce_mean(
+    #    zs.sgvb(log_joint, {'x': x_obs}, {'z': [qz_samples, log_qz]}, axis=0))
 
     # Importance sampling estimates of marginal log likelihood
     is_log_likelihood = tf.reduce_mean(
@@ -113,7 +117,7 @@ if __name__ == "__main__":
 
     learning_rate_ph = tf.placeholder(tf.float32, shape=[], name='lr')
     optimizer = tf.train.AdamOptimizer(learning_rate_ph, epsilon=1e-4)
-    grads = optimizer.compute_gradients(-lower_bound)
+    grads = optimizer.compute_gradients(cost)
     infer = optimizer.apply_gradients(grads)
 
     params = tf.trainable_variables()
@@ -148,6 +152,7 @@ if __name__ == "__main__":
                                             learning_rate_ph: learning_rate,
                                             n_particles: lb_samples,
                                             is_training: True})
+                print(lb)
                 lbs.append(lb)
             time_epoch += time.time()
             print('Epoch {} ({:.1f}s): Lower bound = {}'.format(
@@ -184,5 +189,3 @@ if __name__ == "__main__":
                     os.makedirs(os.path.dirname(save_path))
                 saver.save(sess, save_path)
                 print('Done')
-
-
