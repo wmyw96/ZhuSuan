@@ -175,7 +175,7 @@ def planar_normalizing_flow(samples, log_probs, n_iters):
 
         # check invertible
         invertible_check = tf.assert_greater_equal(
-            scalar, tf.constant(-1.0, dtype=tf.float32),
+            scalar, tf.constant(-1.0 - 1e-6, dtype=tf.float32),
             message="w'u must be greater or equal to -1")
         with tf.control_dependencies([invertible_check]):
             scalar = tf.identity(scalar)

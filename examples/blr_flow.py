@@ -384,7 +384,7 @@ def plot_samples(w_samples, n, m, id, iter):
 
 
 if __name__ == "__main__":
-    tf.set_random_seed(6671)
+    tf.set_random_seed(1237)
     np.random.seed(1234)
 
     # Define model parameters
@@ -450,16 +450,16 @@ if __name__ == "__main__":
     # VI with Flow
     fw_samples, log_fw, flow_s, masked_weights, biases = inv_autoregressive_flow(vw_samples,
                                                    None, log_qw,
-                                                   made, 2, update='normal')
-    fw_samples = vw_samples
-    log_fw = log_qw
-    dif = tf.reduce_mean((vw_samples - fw_samples) * (vw_samples - fw_samples))
-    #fw_samples, log_fw = planar_normalizing_flow(vw_samples, log_qw, 20)
+                                                   made, 1, update='normal')
+    #fw_samples = vw_samples
+    #log_fw = log_qw
+    #fw_samples, log_fw = planar_normalizing_flow(vw_samples, log_qw, 80)
     #fw_samples = house_hold_flow(vw_samples)
     #for iter in range(20):
     #    fw_samples = house_hold_flow(fw_samples)
     #fw_samples = vw_samples
     #log_fw = log_qw
+    dif = tf.reduce_mean((vw_samples - fw_samples) * (vw_samples - fw_samples))
 
     flow_lower_bound = tf.reduce_mean(
         log_joint({'w': fw_samples, 'y': y_obs})[0] - log_fw)
@@ -565,7 +565,7 @@ if __name__ == "__main__":
         '''
         # Run the mean-field variational inference with flow
         for epoch in range(1, 1001):
-            lr = learning_rate * 0.1 * t0 / (t0 + epoch - 1)
+            lr = learning_rate * t0 * 0.1 / (t0 + epoch - 1)
             time_epoch = -time.time()
             _, lb, d = sess.run([flow_infer, flow_lower_bound, dif],
                                 feed_dict={x: train_x,
@@ -579,13 +579,13 @@ if __name__ == "__main__":
             #break
             if epoch % 100 == 0:
                 plot_samples(fw_samples, 3, 4, epoch / 100 + 2, epoch)
-            if epoch % 100 == 0:
+            '''if epoch % 100 == 0:
                 mws = sess.run(masked_weights, feed_dict={x:train_x, y:train_y,
                                                           n_particles: 100})
                 bs = sess.run(biases, feed_dict={x:train_x, y:train_y,
                                                           n_particles: 100})
                 print(mws)
-                print(bs)
+                print(bs)'''
 
 
 
