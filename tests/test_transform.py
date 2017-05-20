@@ -37,6 +37,13 @@ class TestPlanarNormalizingFlow(tf.test.TestCase):
                                                n_log_det_ja])
             self.assertAllClose(test_value, true_value)
 
+    def test_static_flow_shape(self):
+        z = tf.random_normal(shape=(2, 10, 6), mean=0, stddev=0.05)
+        log_pz = tf.random_normal(shape=(2, 10), mean=0, stddev=0.05)
+        t_z, t_log_pz = planar_normalizing_flow(z, log_pz, n_iters=10)
+        self.assertEqual(t_z.get_shape().as_list(), [2, 10, 6])
+        self.assertEqual(t_log_pz.get_shape().as_list(0), [2, 10])
+
 
 class TestLinearIaf(tf.test.TestCase):
     def test_linear_iaf(self):
@@ -63,3 +70,11 @@ class TestLinearIaf(tf.test.TestCase):
             test_value, true_value = sess.run([-log_det_jacobian,
                                                n_log_det_ja])
             self.assertAllClose(test_value, true_value)
+
+    def test_static_flow_shape(self):
+        z = tf.random_normal(shape=(2, 10, 6), mean=0, stddev=0.05)
+        log_pz = tf.random_normal(shape=(2, 10), mean=0, stddev=0.05)
+        t_z, t_log_pz = inv_autoregressive_flow(z, None, log_pz, linear_ar,
+                                                n_iters=10)
+        self.assertEqual(t_z.get_shape().as_list(), [2, 10, 6])
+        self.assertEqual(t_log_pz.get_shape().as_list(), [2, 10])
