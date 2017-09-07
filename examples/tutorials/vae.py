@@ -31,8 +31,7 @@ def main():
     def vae(observed, n, n_x, n_z):
         with zs.BayesianNet(observed=observed) as model:
             z_mean = tf.zeros([n, n_z])
-            z_logstd = tf.zeros([n, n_z])
-            z = zs.Normal('z', z_mean, z_logstd, group_event_ndims=1)
+            z = zs.Normal('z', z_mean, std=1., group_event_ndims=1)
             lx_z = layers.fully_connected(z, 500)
             lx_z = layers.fully_connected(lx_z, 500)
             x_logits = layers.fully_connected(lx_z, n_x, activation_fn=None)
@@ -46,7 +45,7 @@ def main():
             lz_x = layers.fully_connected(lz_x, 500)
             z_mean = layers.fully_connected(lz_x, n_z, activation_fn=None)
             z_logstd = layers.fully_connected(lz_x, n_z, activation_fn=None)
-            z = zs.Normal('z', z_mean, z_logstd, group_event_ndims=1)
+            z = zs.Normal('z', z_mean, logstd=z_logstd, group_event_ndims=1)
         return variational
 
     x = tf.placeholder(tf.int32, shape=[None, n_x], name='x')
@@ -74,7 +73,7 @@ def main():
     x_gen = tf.reshape(tf.sigmoid(x_logits), [-1, 28, 28, 1])
 
     # Define training parameters
-    epoches = 500
+    epochs = 500
     batch_size = 128
     iters = x_train.shape[0] // batch_size
     save_freq = 1
@@ -82,7 +81,7 @@ def main():
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
 
-        for epoch in range(1, epoches + 1):
+        for epoch in range(1, epochs + 1):
             np.random.shuffle(x_train)
             lbs = []
             for t in range(iters):

@@ -40,9 +40,8 @@ def main():
             for i, (n_in, n_out) in enumerate(zip(layer_sizes[:-1],
                                                   layer_sizes[1:])):
                 w_mu = tf.zeros([1, n_out, n_in + 1])
-                w_logstd = tf.zeros([1, n_out, n_in + 1])
                 ws.append(
-                    zs.Normal('w' + str(i), w_mu, w_logstd,
+                    zs.Normal('w' + str(i), w_mu, std=1.,
                               n_samples=n_particles, group_event_ndims=2))
 
             # forward
@@ -60,7 +59,7 @@ def main():
             y_mean = tf.squeeze(ly_x, [2, 3])
             y_logstd = tf.get_variable('y_logstd', shape=[],
                                        initializer=tf.constant_initializer(0.))
-            y = zs.Normal('y', y_mean, y_logstd)
+            y = zs.Normal('y', y_mean, logstd=y_logstd)
 
         return model, y_mean
 
@@ -76,7 +75,7 @@ def main():
                     'w_logstd_' + str(i), shape=[1, n_out, n_in + 1],
                     initializer=tf.constant_initializer(0.))
                 ws.append(
-                    zs.Normal('w' + str(i), w_mean, w_logstd,
+                    zs.Normal('w' + str(i), w_mean, logstd=w_logstd,
                               n_samples=n_particles, group_event_ndims=2))
         return variational
 
@@ -117,7 +116,7 @@ def main():
     # Define training/evaluation parameters
     lb_samples = 10
     ll_samples = 5000
-    epoches = 500
+    epochs = 500
     batch_size = 10
     iters = int(np.floor(x_train.shape[0] / float(batch_size)))
     test_freq = 10
@@ -125,7 +124,7 @@ def main():
     # Run the inference
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
-        for epoch in range(1, epoches + 1):
+        for epoch in range(1, epochs + 1):
             lbs = []
             for t in range(iters):
                 x_batch = x_train[t * batch_size:(t + 1) * batch_size]

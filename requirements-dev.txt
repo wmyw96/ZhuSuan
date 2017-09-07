@@ -1,9 +1,9 @@
 -r requirements.txt
+tensorflow>=1.0.0
 Sphinx
 sphinxcontrib-bibtex
 coverage
 pep8
-scipy
 matplotlib
 mock
 scikit-image

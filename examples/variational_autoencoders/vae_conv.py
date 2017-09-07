@@ -23,8 +23,7 @@ def vae_conv(observed, n, n_x, n_z, n_particles, is_training):
         normalizer_params = {'is_training': is_training,
                              'updates_collections': None}
         z_mean = tf.zeros([n, n_z])
-        z_logstd = tf.zeros([n, n_z])
-        z = zs.Normal('z', z_mean, z_logstd, n_samples=n_particles,
+        z = zs.Normal('z', z_mean, std=1., n_samples=n_particles,
                       group_event_ndims=1)
         lx_z = tf.reshape(z, [-1, 1, 1, n_z])
         lx_z = layers.conv2d_transpose(
@@ -68,7 +67,7 @@ def q_net(x, n_xl, n_z, n_particles, is_training):
         lz_x = tf.reshape(lz_x, [-1, 128 * 3 * 3])
         lz_mean = layers.fully_connected(lz_x, n_z, activation_fn=None)
         lz_logstd = layers.fully_connected(lz_x, n_z, activation_fn=None)
-        z = zs.Normal('z', lz_mean, lz_logstd, n_samples=n_particles,
+        z = zs.Normal('z', lz_mean, logstd=lz_logstd, n_samples=n_particles,
                       group_event_ndims=1)
     return variational
 
@@ -92,7 +91,7 @@ if __name__ == "__main__":
     # Define training/evaluation parameters
     lb_samples = 1
     ll_samples = 100
-    epoches = 3000
+    epochs = 3000
     batch_size = 100
     test_batch_size = 100
     iters = x_train.shape[0] // batch_size
@@ -138,7 +137,7 @@ if __name__ == "__main__":
     # Run the inference
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
-        for epoch in range(1, epoches + 1):
+        for epoch in range(1, epochs + 1):
             time_epoch = -time.time()
             if epoch % anneal_lr_freq == 0:
                 learning_rate *= anneal_lr_rate

@@ -21,8 +21,7 @@ from examples.utils import dataset
 def M2(observed, n, n_x, n_y, n_z, n_particles):
     with zs.BayesianNet(observed=observed) as model:
         z_mean = tf.zeros([n, n_z])
-        z_logstd = tf.zeros([n, n_z])
-        z = zs.Normal('z', z_mean, z_logstd, n_samples=n_particles,
+        z = zs.Normal('z', z_mean, std=1., n_samples=n_particles,
                       group_event_ndims=1)
         y_logits = tf.zeros([n, n_y])
         y = zs.OnehotCategorical('y', y_logits, n_samples=n_particles)
@@ -53,7 +52,7 @@ def qy_x(x, n_y):
 def labeled_proposal(x, y, n_z, n_particles):
     with zs.BayesianNet() as proposal:
         z_mean, z_logstd = qz_xy(x, y, n_z)
-        z = zs.Normal('z', z_mean, z_logstd, n_samples=n_particles,
+        z = zs.Normal('z', z_mean, logstd=z_logstd, n_samples=n_particles,
                       group_event_ndims=1, is_reparameterized=False)
     return proposal
 
@@ -64,7 +63,7 @@ def unlabeled_proposal(x, n_y, n_z, n_particles):
         y = zs.OnehotCategorical('y', y_logits, n_samples=n_particles)
         x_tiled = tf.tile(tf.expand_dims(x, 0), [n_particles, 1, 1])
         z_mean, z_logstd = qz_xy(x_tiled, y, n_z)
-        z = zs.Normal('z', z_mean, z_logstd, group_event_ndims=1,
+        z = zs.Normal('z', z_mean, logstd=z_logstd, group_event_ndims=1,
                       is_reparameterized=False)
     return proposal
 
@@ -87,7 +86,7 @@ if __name__ == "__main__":
     # Define training/evaluation parameters
     ll_samples = 10
     beta = 1200.
-    epoches = 3000
+    epochs = 3000
     batch_size = 100
     test_batch_size = 100
     iters = x_unlabeled.shape[0] // batch_size
@@ -162,7 +161,7 @@ if __name__ == "__main__":
     # Run the inference
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
-        for epoch in range(1, epoches + 1):
+        for epoch in range(1, epochs + 1):
             time_epoch = -time.time()
             if epoch % anneal_lr_freq == 0:
                 learning_rate *= anneal_lr_rate

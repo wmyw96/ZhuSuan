@@ -3,6 +3,7 @@
 
 from __future__ import absolute_import
 from __future__ import division
+import warnings
 
 import numpy as np
 import tensorflow as tf
@@ -11,7 +12,10 @@ from zhusuan.distributions.base import *
 from zhusuan.distributions.utils import \
         maybe_explicit_broadcast, \
         assert_same_float_dtype, \
-        assert_same_float_and_int_dtype
+        assert_same_float_and_int_dtype, \
+        assert_scalar, \
+        assert_rank_at_least_one, \
+        open_interval_standard_uniform
 
 
 __all__ = [
@@ -26,6 +30,7 @@ __all__ = [
     'Binomial',
     'InverseGamma',
     'Laplace',
+    'BinConcrete',
 ]
 
 
@@ -34,10 +39,17 @@ class Normal(Distribution):
     The class of univariate Normal distribution.
     See :class:`~zhusuan.distributions.base.Distribution` for details.
 
+    .. warning::
+
+         The order of arguments `logstd`/`std` will change to `std`/`logstd`
+         in the coming version.
+
     :param mean: A `float` Tensor. The mean of the Normal distribution.
         Should be broadcastable to match `logstd`.
     :param logstd: A `float` Tensor. The log standard deviation of the Normal
         distribution. Should be broadcastable to match `mean`.
+    :param std: A `float` Tensor. The standard deviation of the Normal
+        distribution. Should be positive and broadcastable to match `mean`.
     :param group_event_ndims: A 0-D `int32` Tensor representing the number of
         dimensions in `batch_shape` (counted from the end) that are grouped
         into a single event, so that their probabilities are calculated
@@ -52,24 +64,43 @@ class Normal(Distribution):
 
     def __init__(self,
                  mean=0.,
-                 logstd=0.,
+                 logstd=None,
+                 std=None,
                  group_event_ndims=0,
                  is_reparameterized=True,
                  check_numerics=False):
         self._mean = tf.convert_to_tensor(mean)
-        self._logstd = tf.convert_to_tensor(logstd)
-        dtype = assert_same_float_dtype(
-            [(self._mean, 'Normal.mean'),
-             (self._logstd, 'Normal.logstd')])
+        warnings.warn("Normal: The order of arguments logstd/std will change "
+                      "to std/logstd in the coming version.")
+        if (logstd is None) == (std is None):
+            raise ValueError("Either std or logstd should be passed but not "
+                             "both of them.")
+        elif logstd is None:
+            self._std = tf.convert_to_tensor(std)
+            dtype = assert_same_float_dtype([(self._mean, 'Normal.mean'),
+                                             (self._std, 'Normal.std')])
+            logstd = tf.log(self._std)
+            if check_numerics:
+                logstd = tf.check_numerics(logstd, "log(std)")
+            self._logstd = logstd
+        else:
+            # std is None
+            self._logstd = tf.convert_to_tensor(logstd)
+            dtype = assert_same_float_dtype([(self._mean, 'Normal.mean'),
+                                             (self._logstd, 'Normal.logstd')])
+            std = tf.exp(self._logstd)
+            if check_numerics:
+                std = tf.check_numerics(std, "exp(logstd)")
+            self._std = std
 
         try:
             tf.broadcast_static_shape(self._mean.get_shape(),
-                                      self._logstd.get_shape())
+                                      self._std.get_shape())
         except ValueError:
             raise ValueError(
-                "mean and logstd should be broadcastable to match each "
+                "mean and std/logstd should be broadcastable to match each "
                 "other. ({} vs. {})".format(
-                    self._mean.get_shape(), self._logstd.get_shape()))
+                    self._mean.get_shape(), self._std.get_shape()))
         self._check_numerics = check_numerics
         super(Normal, self).__init__(
             dtype=dtype,
@@ -88,6 +119,11 @@ class Normal(Distribution):
         """The log standard deviation of the Normal distribution."""
         return self._logstd
 
+    @property
+    def std(self):
+        """The standard deviation of the Normal distribution."""
+        return self._std
+
     def _value_shape(self):
         return tf.constant([], dtype=tf.int32)
 
@@ -96,20 +132,19 @@ class Normal(Distribution):
 
     def _batch_shape(self):
         return tf.broadcast_dynamic_shape(tf.shape(self.mean),
-                                          tf.shape(self.logstd))
+                                          tf.shape(self.std))
 
     def _get_batch_shape(self):
         return tf.broadcast_static_shape(self.mean.get_shape(),
-                                         self.logstd.get_shape())
+                                         self.std.get_shape())
 
     def _sample(self, n_samples):
-        mean, logstd = self.mean, self.logstd
+        mean, std = self.mean, self.std
         if not self.is_reparameterized:
             mean = tf.stop_gradient(mean)
-            logstd = tf.stop_gradient(logstd)
+            std = tf.stop_gradient(std)
         shape = tf.concat([[n_samples], self.batch_shape], 0)
-        samples = tf.random_normal(shape, dtype=self.dtype) * \
-            tf.exp(logstd) + mean
+        samples = tf.random_normal(shape, dtype=self.dtype) * std + mean
         static_n_samples = n_samples if isinstance(n_samples, int) else None
         samples.set_shape(
             tf.TensorShape([static_n_samples]).concatenate(
@@ -120,9 +155,7 @@ class Normal(Distribution):
         c = -0.5 * np.log(2 * np.pi)
         precision = tf.exp(-2 * self.logstd)
         if self._check_numerics:
-            with tf.control_dependencies(
-                    [tf.check_numerics(precision, "precision")]):
-                precision = tf.identity(precision)
+            precision = tf.check_numerics(precision, "precision")
         return c - self.logstd - 0.5 * precision * tf.square(given - self.mean)
 
     def _prob(self, given):
@@ -235,19 +268,9 @@ class Categorical(Distribution):
             dtype = tf.int32
         assert_same_float_and_int_dtype([], dtype)
 
+        self._logits, self._n_categories = assert_rank_at_least_one(
+            self._logits, 'Categorical.logits')
         static_logits_shape = self._logits.get_shape()
-        shape_err_msg = "logits should have rank >= 1."
-        if static_logits_shape and (static_logits_shape.ndims < 1):
-            raise ValueError(shape_err_msg)
-        elif static_logits_shape and (
-                static_logits_shape[-1].value is not None):
-            self._n_categories = static_logits_shape[-1].value
-        else:
-            _assert_shape_op = tf.assert_rank_at_least(
-                self._logits, 1, message=shape_err_msg)
-            with tf.control_dependencies([_assert_shape_op]):
-                self._logits = tf.identity(self._logits)
-            self._n_categories = tf.shape(self._logits)[-1]
 
         super(Categorical, self).__init__(
             dtype=dtype,
@@ -449,9 +472,7 @@ class Uniform(Distribution):
     def _log_prob(self, given):
         log_p = tf.log(self._prob(given))
         if self._check_numerics:
-            with tf.control_dependencies(
-                    [tf.check_numerics(log_p, message="log_p")]):
-                log_p = tf.identity(log_p)
+            log_p = tf.check_numerics(log_p, "log_p")
         return log_p
 
     def _prob(self, given):
@@ -460,9 +481,7 @@ class Uniform(Distribution):
                        self.dtype)
         p = 1. / (self.maxval - self.minval)
         if self._check_numerics:
-            with tf.control_dependencies(
-                    [tf.check_numerics(p, message="p")]):
-                p = tf.identity(p)
+            p = tf.check_numerics(p, "p")
         return p * mask
 
 
@@ -542,15 +561,12 @@ class Gamma(Distribution):
     def _log_prob(self, given):
         alpha, beta = self.alpha, self.beta
         log_given = tf.log(given)
-        log_alpha, log_beta = tf.log(alpha), tf.log(beta)
+        log_beta = tf.log(beta)
         lgamma_alpha = tf.lgamma(alpha)
         if self._check_numerics:
-            with tf.control_dependencies(
-                    [tf.check_numerics(log_given, "log(given)"),
-                     tf.check_numerics(log_alpha, "log(alpha)"),
-                     tf.check_numerics(log_beta, "log(beta)"),
-                     tf.check_numerics(lgamma_alpha, "lgamma(alpha)")]):
-                log_given = tf.identity(log_given)
+            log_given = tf.check_numerics(log_given, "log(given)")
+            log_beta = tf.check_numerics(log_beta, "log(beta)")
+            lgamma_alpha = tf.check_numerics(lgamma_alpha, "lgamma(alpha)")
         return alpha * log_beta - lgamma_alpha + (alpha - 1) * log_given - \
             beta * given
 
@@ -644,15 +660,16 @@ class Beta(Distribution):
         log_1_minus_given = tf.log(1 - given)
         lgamma_alpha, lgamma_beta = tf.lgamma(alpha), tf.lgamma(beta)
         lgamma_alpha_plus_beta = tf.lgamma(alpha + beta)
+
         if self._check_numerics:
-            with tf.control_dependencies(
-                    [tf.check_numerics(log_given, "log(given)"),
-                     tf.check_numerics(log_1_minus_given, "log(1 - given)"),
-                     tf.check_numerics(lgamma_alpha, "lgamma(alpha)"),
-                     tf.check_numerics(lgamma_beta, "lgamma(beta)"),
-                     tf.check_numerics(lgamma_alpha_plus_beta,
-                                       "lgamma(alpha + beta)")]):
-                log_given = tf.identity(log_given)
+            log_given = tf.check_numerics(log_given, "log(given)")
+            log_1_minus_given = tf.check_numerics(
+                log_1_minus_given, "log(1 - given)")
+            lgamma_alpha = tf.check_numerics(lgamma_alpha, "lgamma(alpha)")
+            lgamma_beta = tf.check_numerics(lgamma_beta, "lgamma(beta)")
+            lgamma_alpha_plus_beta = tf.check_numerics(
+                lgamma_alpha_plus_beta, "lgamma(alpha + beta)")
+
         return (alpha - 1) * log_given + (beta - 1) * log_1_minus_given - (
             lgamma_alpha + lgamma_beta - lgamma_alpha_plus_beta)
 
@@ -717,32 +734,41 @@ class Poisson(Distribution):
         return self.rate.get_shape()
 
     def _sample(self, n_samples):
-        # This algorithm to generate random Poisson-distributed numbers is
-        # given by Kunth [1]
-        # [1]: https://en.wikipedia.org/wiki/
-        #      Poisson_distribution#Generating_Poisson-distributed_random_variables
-        shape = tf.concat([[n_samples], self.batch_shape], 0)
-        static_n_samples = n_samples if isinstance(n_samples, int) else None
-        static_shape = tf.TensorShape([static_n_samples]).concatenate(
-            self.get_batch_shape())
+        try:
+            # tf.random_poisson is implemented after v1.2
+            random_poisson = tf.random_poisson
+        except AttributeError:
+            # This algorithm to generate random Poisson-distributed numbers is
+            # given by Kunth [1]
+            # [1]: https://en.wikipedia.org/wiki/
+            #      Poisson_distribution#Generating_Poisson-distributed_random_variables
+            shape = tf.concat([[n_samples], self.batch_shape], 0)
+            static_n_samples = n_samples if isinstance(n_samples,
+                                                       int) else None
+            static_shape = tf.TensorShape([static_n_samples]).concatenate(
+                self.get_batch_shape())
+            enlam = tf.exp(-self.rate)
+            x = tf.zeros(shape, dtype=self.dtype)
+            prod = tf.ones(shape, dtype=self.param_dtype)
 
-        enlam = tf.exp(-self.rate)
-        x = tf.zeros(shape, dtype=self.dtype)
-        prod = tf.ones(shape, dtype=self.param_dtype)
+            def loop_cond(prod, x):
+                return tf.reduce_any(tf.greater_equal(prod, enlam))
 
-        def loop_cond(prod, x):
-            return tf.reduce_any(tf.greater_equal(prod, enlam))
+            def loop_body(prod, x):
+                prod *= tf.random_uniform(tf.shape(prod), minval=0, maxval=1)
+                x += tf.cast(tf.greater_equal(prod, enlam), dtype=self.dtype)
+                return prod, x
 
-        def loop_body(prod, x):
-            prod *= tf.random_uniform(tf.shape(prod), minval=0, maxval=1)
-            x += tf.cast(tf.greater_equal(prod, enlam), dtype=self.dtype)
-            return prod, x
+            _, samples = tf.while_loop(
+                loop_cond, loop_body, loop_vars=[prod, x],
+                shape_invariants=[static_shape, static_shape])
 
-        _, samples = tf.while_loop(
-            loop_cond, loop_body, loop_vars=[prod, x],
-            shape_invariants=[static_shape, static_shape])
-
-        samples.set_shape(static_shape)
+            samples.set_shape(static_shape)
+        else:
+            samples = random_poisson(self.rate, [n_samples],
+                                     dtype=self.param_dtype)
+            if self.param_dtype != self.dtype:
+                samples = tf.cast(samples, self.dtype)
         return samples
 
     def _log_prob(self, given):
@@ -753,11 +779,9 @@ class Poisson(Distribution):
         lgamma_given_plus_1 = tf.lgamma(given + 1)
 
         if self._check_numerics:
-            with tf.control_dependencies(
-                    [tf.check_numerics(log_rate, "log(rate)"),
-                     tf.check_numerics(lgamma_given_plus_1,
-                                       "lgamma(given + 1)")]):
-                log_rate = tf.identity(log_rate)
+            log_rate = tf.check_numerics(log_rate, "log(rate)")
+            lgamma_given_plus_1 = tf.check_numerics(
+                lgamma_given_plus_1, "lgamma(given + 1)")
         return given * log_rate - rate - lgamma_given_plus_1
 
     def _prob(self, given):
@@ -881,12 +905,10 @@ class Binomial(Distribution):
         lgamma_n_minus_given_plus_1 = tf.lgamma(n - given + 1)
 
         if self._check_numerics:
-            with tf.control_dependencies(
-                    [tf.check_numerics(lgamma_given_plus_1,
-                                       "lgamma(given + 1)"),
-                     tf.check_numerics(lgamma_n_minus_given_plus_1,
-                                       "lgamma(n - given + 1)")]):
-                lgamma_given_plus_1 = tf.identity(lgamma_given_plus_1)
+            lgamma_given_plus_1 = tf.check_numerics(
+                lgamma_given_plus_1, "lgamma(given + 1)")
+            lgamma_n_minus_given_plus_1 = tf.check_numerics(
+                lgamma_n_minus_given_plus_1, "lgamma(n - given + 1)")
 
         return lgamma_n_plus_1 - lgamma_n_minus_given_plus_1 - \
             lgamma_given_plus_1 + given * logits + n * log_1_minus_p
@@ -972,15 +994,14 @@ class InverseGamma(Distribution):
     def _log_prob(self, given):
         alpha, beta = self.alpha, self.beta
         log_given = tf.log(given)
-        log_alpha, log_beta = tf.log(alpha), tf.log(beta)
+        log_beta = tf.log(beta)
         lgamma_alpha = tf.lgamma(alpha)
+
         if self._check_numerics:
-            with tf.control_dependencies(
-                    [tf.check_numerics(log_given, "log(given)"),
-                     tf.check_numerics(log_alpha, "log(alpha)"),
-                     tf.check_numerics(log_beta, "log(beta)"),
-                     tf.check_numerics(lgamma_alpha, "lgamma(alpha)")]):
-                log_given = tf.identity(log_given)
+            log_given = tf.check_numerics(log_given, "log(given)")
+            log_beta = tf.check_numerics(log_beta, "log(beta)")
+            lgamma_alpha = tf.check_numerics(lgamma_alpha, "lgamma(alpha)")
+
         return alpha * log_beta - lgamma_alpha - (alpha + 1) * log_given - \
             beta / given
 
@@ -1085,10 +1106,124 @@ class Laplace(Distribution):
     def _log_prob(self, given):
         log_scale = tf.log(self.scale)
         if self._check_numerics:
-            with tf.control_dependencies(
-                    [tf.check_numerics(log_scale, "log(scale)")]):
-                log_scale = tf.identity(log_scale)
+            log_scale = tf.check_numerics(log_scale, "log(scale)")
         return -np.log(2.) - log_scale - tf.abs(given - self.loc) / self.scale
+
+    def _prob(self, given):
+        return tf.exp(self._log_prob(given))
+
+
+class BinConcrete(Distribution):
+    """
+    The class of univariate BinConcrete distribution from (Maddison, 2016).
+    It is the binary case of
+    :class:`~zhusuan.distributions.multivariate.Concrete`.
+    See :class:`~zhusuan.distributions.base.Distribution` for details.
+
+    .. seealso::
+
+        :class:`~zhusuan.distributions.multivariate.Concrete` and
+        :class:`~zhusuan.distributions.multivariate.ExpConcrete`
+
+    :param temperature: A 0-D `float` Tensor. The temperature of the relaxed
+        distribution. The temperature should be positive.
+    :param logits: A `float` Tensor. The log-odds of probabilities of being 1.
+
+        .. math:: \\mathrm{logits} = \\log \\frac{p}{1 - p}
+
+    :param group_event_ndims: A 0-D `int32` Tensor representing the number of
+        dimensions in `batch_shape` (counted from the end) that are grouped
+        into a single event, so that their probabilities are calculated
+        together. Default is 0, which means a single value is an event.
+        See :class:`~zhusuan.distributions.base.Distribution` for more detailed
+        explanation.
+    :param is_reparameterized: A Bool. If True, gradients on samples from this
+        distribution are allowed to propagate into inputs, using the
+        reparametrization trick from (Kingma, 2013).
+    :param check_numerics: Bool. Whether to check numeric issues.
+    """
+
+    def __init__(self,
+                 temperature,
+                 logits,
+                 group_event_ndims=0,
+                 is_reparameterized=True,
+                 check_numerics=False):
+        self._logits = tf.convert_to_tensor(logits)
+        self._temperature = tf.convert_to_tensor(temperature)
+        param_dtype = assert_same_float_dtype(
+            [(self._logits, 'BinConcrete.logits'),
+             (self._temperature, 'BinConcrete.temperature')])
+
+        self._temperature = assert_scalar(
+            self._temperature, 'BinConcrete.temperature')
+
+        self._check_numerics = check_numerics
+        super(BinConcrete, self).__init__(
+            dtype=param_dtype,
+            param_dtype=param_dtype,
+            is_continuous=True,
+            is_reparameterized=is_reparameterized,
+            group_event_ndims=group_event_ndims)
+
+    @property
+    def temperature(self):
+        """The temperature of BinConcrete."""
+        return self._temperature
+
+    @property
+    def logits(self):
+        """The log-odds of probabilities."""
+        return self._logits
+
+    def _value_shape(self):
+        return tf.constant([], dtype=tf.int32)
+
+    def _get_value_shape(self):
+        return tf.TensorShape([])
+
+    def _batch_shape(self):
+        return tf.shape(self.logits)
+
+    def _get_batch_shape(self):
+        return self.logits.get_shape()
+
+    def _sample(self, n_samples):
+        logits, temperature = self.logits, self.temperature
+        if not self.is_reparameterized:
+            logits = tf.stop_gradient(logits)
+            temperature = tf.stop_gradient(temperature)
+        shape = tf.concat([[n_samples], self.batch_shape], 0)
+
+        uniform = open_interval_standard_uniform(shape, self.dtype)
+        # TODO: add Logistic distribution
+        logistic = tf.log(uniform) - tf.log(1 - uniform)
+        samples = tf.sigmoid((logits + logistic) / temperature)
+
+        static_n_samples = n_samples if isinstance(n_samples, int) else None
+        samples.set_shape(
+            tf.TensorShape([static_n_samples]).concatenate(
+                self.get_batch_shape()))
+        return samples
+
+    def _log_prob(self, given):
+        temperature, logits = self.temperature, self.logits
+        log_given = tf.log(given)
+        log_1_minus_given = tf.log(1 - given)
+        log_temperature = tf.log(temperature)
+
+        if self._check_numerics:
+            log_given = tf.check_numerics(log_given, "log(given)")
+            log_1_minus_given = tf.check_numerics(
+                log_1_minus_given, "log(1 - given)")
+            log_temperature = tf.check_numerics(
+                log_temperature, "log(temperature)")
+
+        logistic_given = log_given - log_1_minus_given
+        temp = temperature * logistic_given - logits
+
+        return log_temperature - log_given - log_1_minus_given + \
+            temp - 2 * tf.nn.softplus(temp)
 
     def _prob(self, given):
         return tf.exp(self._log_prob(given))

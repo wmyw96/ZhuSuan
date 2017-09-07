@@ -6,8 +6,10 @@ from __future__ import print_function
 from __future__ import division
 
 from mock import Mock
+import numpy as np
 import tensorflow as tf
 
+import zhusuan as zs
 from zhusuan.model.base import *
 from zhusuan.model.stochastic import *
 
@@ -94,6 +96,43 @@ class TestStochasticTensor(tf.test.TestCase):
                 if StochasticTensor('a', Mock(dtype=tf.float32), 1):
                     pass
 
+    def test_session_run(self):
+        with self.test_session(use_gpu=True) as sess:
+            samples = tf.constant([1, 2, 3])
+            log_probs = Mock()
+            probs = Mock()
+            sample_func = Mock(return_value=samples)
+            log_prob_func = Mock(return_value=log_probs)
+            prob_func = Mock(return_value=probs)
+            distribution = Mock(sample=sample_func,
+                                log_prob=log_prob_func,
+                                prob=prob_func,
+                                dtype=tf.int32)
+
+            # test session.run
+            t = StochasticTensor('t', distribution, 1, samples)
+            self.assertAllEqual(sess.run(t), np.asarray([1, 2, 3]))
+
+            # test using as feed dict
+            self.assertAllEqual(
+                sess.run(tf.identity(t), feed_dict={
+                    t: np.asarray([4, 5, 6])
+                }),
+                np.asarray([4, 5, 6])
+            )
+
+    def test_session_run_issue_49(self):
+        # test fix for the bug at https://github.com/thu-ml/zhusuan/issues/49
+        with zs.BayesianNet(observed={}) as model:
+            x_mean = tf.zeros([1, 2])
+            x_logstd = tf.zeros([1, 2])
+            x = zs.Normal('x', mean=x_mean, logstd=x_logstd,
+                          group_event_ndims=1)
+
+        with self.test_session(use_gpu=True) as sess:
+            sess.run(tf.global_variables_initializer())
+            _ = sess.run(x)
+
 
 class TestBayesianNet(tf.test.TestCase):
     def test_init(self):
@@ -112,9 +151,9 @@ class TestBayesianNet(tf.test.TestCase):
         # outputs
         a_observed = tf.zeros([])
         with BayesianNet({'a': a_observed}) as model:
-            a = Normal('a', 0., 1.)
-            b = Normal('b', 0., 1.)
-            c = Normal('c', b, 1.)
+            a = Normal('a', 0., logstd=1.)
+            b = Normal('b', 0., logstd=1.)
+            c = Normal('c', b, logstd=1.)
         self.assertTrue(model.outputs('a') is a_observed)
         b_out, c_out = model.outputs(['b', 'c'])
         self.assertTrue(b_out is b.tensor)

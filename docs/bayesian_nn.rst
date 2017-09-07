@@ -43,8 +43,8 @@ multivariate standard Normal distribution. With this complex forwarding
 process, the model is enabled to learn complex relationships between the
 input (:math:`x`) and the output (:math:`y`). Finally, some noise is added to
 the output to get a tractable likelihood for the model, which is typically
-a Gaussian noise in regression problems. A graphical model representation for 
-bayesian neural network is as follows. Combining the observed input (:math:`x`) and 
+a Gaussian noise in regression problems. A graphical model representation for
+bayesian neural network is as follows. Combining the observed input (:math:`x`) and
 the global network parameters (:math:`\{W_i\}_{i=1}^L`), the model outputs
 observed (:math:`y`).
 
@@ -68,9 +68,8 @@ for all the data. So we need only one copy of them, that is, we need a
         for i, (n_in, n_out) in enumerate(zip(layer_sizes[:-1],
                                               layer_sizes[1:])):
             w_mu = tf.zeros([1, n_out, n_in + 1])
-            w_logstd = tf.zeros([1, n_out, n_in + 1])
             ws.append(
-                zs.Normal('w' + str(i), w_mu, w_logstd,
+                zs.Normal('w' + str(i), w_mu, std=1.,
                           n_samples=n_particles, group_event_ndims=2))
 
 To make the probabilities of weights in each layer evaluated together,
@@ -103,7 +102,7 @@ likelihood when evaluating the probability::
         y_logstd = tf.get_variable(
             'y_logstd', shape=[],
             initializer=tf.constant_initializer(0.))
-        y = zs.Normal('y', y_mean, y_logstd)
+        y = zs.Normal('y', y_mean, logstd=y_logstd)
 
 Putting together, the code for constructing a BayesianNN is::
 
@@ -117,9 +116,8 @@ Putting together, the code for constructing a BayesianNN is::
             for i, (n_in, n_out) in enumerate(zip(layer_sizes[:-1],
                                                   layer_sizes[1:])):
                 w_mu = tf.zeros([1, n_out, n_in + 1])
-                w_logstd = tf.zeros([1, n_out, n_in + 1])
                 ws.append(
-                    zs.Normal('w' + str(i), w_mu, w_logstd,
+                    zs.Normal('w' + str(i), w_mu, std=1.,
                               n_samples=n_particles, group_event_ndims=2))
 
             # forward
@@ -138,7 +136,7 @@ Putting together, the code for constructing a BayesianNN is::
             y_logstd = tf.get_variable(
                 'y_logstd', shape=[],
                 initializer=tf.constant_initializer(0.))
-            y = zs.Normal('y', y_mean, y_logstd)
+            y = zs.Normal('y', y_mean, logstd=y_logstd)
 
         return model, y_mean
 
@@ -181,7 +179,7 @@ The code for above definition is::
                     'w_logstd_' + str(i), shape=[1, n_out, n_in + 1],
                     initializer=tf.constant_initializer(0.))
                 ws.append(
-                    zs.Normal('w' + str(i), w_mean, w_logstd,
+                    zs.Normal('w' + str(i), w_mean, logstd=w_logstd,
                               n_samples=n_particles, group_event_ndims=2))
         return variational
 
@@ -205,7 +203,7 @@ is zero.
 
 This lower bound is usually called Evidence Lower Bound (ELBO). Note that the
 only probabilities we need to evaluate in it is the joint likelihood and
-the probability of the variational posterior. ELBO can also be rearranged as 
+the probability of the variational posterior. ELBO can also be rearranged as
 log conditional likelihood and KL divergence between variational posterior and prior.
 In our setting, both variaional posterior and prior are normal distribution. Their
 KL divergence is easy to compute. The log conditional likelihood is
@@ -214,18 +212,18 @@ KL divergence is easy to compute. The log conditional likelihood is
     \log p(y|x, W) = \sum_{n=1}^N\log p(y_n|x_n, W)
 
 Computing log conditional likelihood for the whole dataset is very time-consuming.
-To solve this problem, we take the idea of ``mini-batch`` to approximate the conditional 
+To solve this problem, we take the idea of ``mini-batch`` to approximate the conditional
 likelihood
 
 .. math::
     \log p(y|x, W) \approx \frac{N}{M}\sum_{m=1}^M\log p(y_m| x_m, W)
 
-The dataset :math:`\{(x_m, y_m)\}_{m=1:M}` is a subset of :math:`M` nonrepetitive random samples from the training set 
+The dataset :math:`\{(x_m, y_m)\}_{m=1:M}` is a subset of :math:`M` nonrepetitive random samples from the training set
 :math:`\{(x_n, y_n)\}_{n=1:N}`. By setting :math:`M` relatively small, we can compute the formula
 above efficiently. What's more, using ``mini-batch`` brings us additional benefits.
 Training neural networks has a general problem that the parameters can be stuck in a local
-minimum, which limits the model performance. Therefore, in the training process, 
-we hope the model parameters have the ability to jump out of the local minimum area when stuck at it 
+minimum, which limits the model performance. Therefore, in the training process,
+we hope the model parameters have the ability to jump out of the local minimum area when stuck at it
 and search in a bigger space to find the global minimum. ``Mini-batch`` samples brings along
 randomness, which gives the parameters greater chance to search in a bigger space. Therefore, using
 ``mini-batch`` in training also helps optimization.
@@ -364,7 +362,7 @@ run the training loop and see how Bayesian Neural Networks performs::
     # Define training/evaluation parameters
     lb_samples = 10
     ll_samples = 5000
-    epoches = 500
+    epochs = 500
     batch_size = 10
     iters = int(np.floor(x_train.shape[0] / float(batch_size)))
     test_freq = 10
@@ -372,7 +370,7 @@ run the training loop and see how Bayesian Neural Networks performs::
     # Run the inference
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
-        for epoch in range(1, epoches + 1):
+        for epoch in range(1, epochs + 1):
             lbs = []
             for t in range(iters):
                 x_batch = x_train[t * batch_size:(t + 1) * batch_size]

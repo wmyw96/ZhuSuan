@@ -9,6 +9,7 @@ from collections import OrderedDict
 import six
 from six.moves import zip
 import tensorflow as tf
+from tensorflow.python.client.session import register_session_run_conversion_functions
 
 from zhusuan.model.utils import Context, TensorArithmeticMixin
 
@@ -186,6 +187,15 @@ class StochasticTensor(TensorArithmeticMixin):
 tf.register_tensor_conversion_function(
     StochasticTensor, StochasticTensor._to_tensor)
 
+# bring support for session.run(StochasticTensor), and for using as keys
+# in feed_dict.
+register_session_run_conversion_functions(
+    StochasticTensor,
+    fetch_function=lambda t: ([t.tensor], lambda val: val[0]),
+    feed_function=lambda t, v: [(t.tensor, v)],
+    feed_function_for_partial_run=lambda t: [t.tensor]
+)
+
 
 class BayesianNet(Context):
     """
@@ -217,7 +227,7 @@ class BayesianNet(Context):
 
         def bayesian_linear_regression(x, alpha, beta):
             with zs.BayesianNet() as model:
-                w = zs.Normal('w', mean=0., logstd=tf.log(alpha)
+                w = zs.Normal('w', mean=0., logstd=tf.log(alpha))
                 y_mean = tf.reduce_sum(tf.expand_dims(w, 0) * x, 1)
                 y = zs.Normal('y', y_mean, tf.log(beta))
             return model
@@ -229,7 +239,7 @@ class BayesianNet(Context):
 
         def bayesian_linear_regression(observed, x, alpha, beta):
             with zs.BayesianNet(observed=observed) as model:
-                w = zs.Normal('w', mean=0., logstd=tf.log(alpha)
+                w = zs.Normal('w', mean=0., logstd=tf.log(alpha))
                 y_mean = tf.reduce_sum(tf.expand_dims(w, 0) * x, 1)
                 y = zs.Normal('y', y_mean, tf.log(beta))
             return model
@@ -290,6 +300,35 @@ class BayesianNet(Context):
         else:
             self._stochastic_tensors[s_tensor.name] = s_tensor
 
+    def _check_names_exist(self, name_or_names):
+        """
+        Check whether the stochastic tensors are in the network
+
+        :param name_or_names: A string or a list of strings. Names of
+            `StochasticTensor` s in the network.
+        """
+        if isinstance(name_or_names, (tuple, list)):
+            names = name_or_names
+        else:
+            names = [name_or_names]
+        for name in names:
+            if name not in self._stochastic_tensors:
+                raise ValueError("There is no StochasticTensor named '{}' in "
+                                 "the BayesianNet.".format(name))
+
+    def get(self, name_or_names):
+        """
+        Get the `StochasticTensor` in the network by their names.
+
+        :param name_or_names: A string or a list of strings. Names of
+            `StochasticTensor` s in the network.
+        """
+        self._check_names_exist(name_or_names)
+        if isinstance(name_or_names, (tuple, list)):
+            return [self._stochastic_tensors[name] for name in name_or_names]
+        else:
+            return self._stochastic_tensors[name_or_names]
+
     def outputs(self, name_or_names):
         """
         Get the outputs of :class:`StochasticTensor` s by their names,
@@ -301,6 +340,7 @@ class BayesianNet(Context):
             `StochasticTensor` s in the network.
         :return: A Tensor or a list of Tensors.
         """
+        self._check_names_exist(name_or_names)
         if isinstance(name_or_names, (tuple, list)):
             return [self._stochastic_tensors[name].tensor
                     for name in name_or_names]
@@ -318,6 +358,7 @@ class BayesianNet(Context):
             `StochasticTensor` s in the network.
         :return: A Tensor or a list of Tensors.
         """
+        self._check_names_exist(name_or_names)
         if isinstance(name_or_names, (tuple, list)):
             ret = []
             for name in name_or_names:
@@ -348,6 +389,7 @@ class BayesianNet(Context):
 
         :return: Tuple of Tensors or a list of tuples of Tensors.
         """
+        self._check_names_exist(name_or_names)
         ret = []
         if outputs:
             ret.append(self.outputs(name_or_names))

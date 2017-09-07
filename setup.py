@@ -10,7 +10,7 @@ from os import path
 here = path.abspath(path.dirname(__file__))
 
 # Get the long description from the README file
-with open(path.join(here, 'README.md'), encoding='utf-8') as f:
+with open(path.join(here, 'README.rst'), encoding='utf-8') as f:
     long_description = f.read()
 
 setup(
@@ -25,7 +25,7 @@ setup(
     long_description=long_description,
 
     # The project's main homepage.
-    url='https://github.com/thjashin/ZhuSuan',
+    url='https://github.com/thu-ml/zhusuan',
 
     # Author details
     author='ZhuSuan contributors',
@@ -55,7 +55,9 @@ setup(
         'Programming Language :: Python :: 2',
         'Programming Language :: Python :: 2.7',
         'Programming Language :: Python :: 3',
+        'Programming Language :: Python :: 3.4',
         'Programming Language :: Python :: 3.5',
+        'Programming Language :: Python :: 3.6',
     ],
 
     # What does your project relate to?
@@ -63,7 +65,8 @@ setup(
 
     # You can just specify the packages manually here if your project is
     # simple. Or you can use find_packages().
-    packages=find_packages(exclude=['docs', 'tests']),
+    packages=find_packages(exclude=['tests', 'tests.*',
+                                    'examples', 'examples.*']),
 
     # Alternatively, if you want to distribute just a my_module.py, uncomment
     # this:
@@ -74,6 +77,7 @@ setup(
     # requirements files see:
     # https://packaging.python.org/en/latest/requirements.html
     install_requires=['numpy',
+                      'scipy',
                       'six'],
 
     # List additional groups of dependencies here (e.g. development
